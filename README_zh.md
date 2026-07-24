@@ -93,7 +93,8 @@ python setup_matting.py --dml
 
 ```text
 sketch2asset/
-├── start.bat                  # Windows 一键启动脚本
+├── start.bat                  # Windows 一键启动与依赖自动补全脚本
+├── requirements.txt           # 基础运行依赖包清单
 ├── server.py                 # 本地轻量服务器 (托管 + 代理 API + 项目管理)
 ├── index.html                # 前端 App (Awwwards 布局 + Canvas 修补 + i18n + 动态主题)
 ├── setup_matting.py / .bat   # AI 抠图环境安装与模型自动下载脚本

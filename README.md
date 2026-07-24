@@ -93,7 +93,8 @@ Easily switch AI matting models in the Studio Inspector sidebar:
 
 ```text
 sketch2asset/
-├── start.bat                  # Windows startup script
+├── start.bat                  # Windows one-click start & auto-install script
+├── requirements.txt           # Python dependency requirements list
 ├── server.py                 # Local server (hosting + API proxy + project manager)
 ├── index.html                # Single-page App (Awwwards layout + Canvas retouch + i18n + Dual Theme)
 ├── setup_matting.py / .bat   # Environment setup & ONNX model downloader

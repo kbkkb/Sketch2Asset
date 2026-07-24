@@ -1,0 +1,5 @@
+# Sketch2Asset 运行依赖包清单
+requests>=2.25.0
+Pillow>=8.0.0
+numpy>=1.19.0
+onnxruntime>=1.12.0

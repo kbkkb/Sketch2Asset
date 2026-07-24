@@ -1,0 +1,20 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local Runtime Generated AI Models (Will be downloaded automatically by setup_matting.py)
+models/
+
+# Local Generated Gallery & Output Images
+outputs/
+
+# Local Runtime Logs & Auto Configs
+matting_worker.log
+matting_config.json
+
+# Environment / OS Files
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp

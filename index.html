@@ -1,0 +1,1984 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sketch2Asset — 游戏资产生成与工作台</title>
+<!-- Lucide Vector Icons -->
+<script src="https://unpkg.com/lucide@latest"></script>
+<!-- Typography -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root, [data-theme="dark"]{
+    --bg:#07080c; --bg-gradient:radial-gradient(ellipse at 50% 0%, #1e1b4b 0%, #07080c 70%);
+    --panel:rgba(18, 20, 29, 0.75); --panel-solid:#11131c;
+    --panel2:rgba(26, 30, 44, 0.65); --line:rgba(255, 255, 255, 0.08);
+    --line-glow:rgba(99, 102, 241, 0.3);
+    --text:#f8fafc; --muted:#94a3b8; --accent:#6366f1; --accent2:#8b5cf6;
+    --accent-glow:rgba(99, 102, 241, 0.35); --ok:#34d399; --err:#f87171; --radius:12px;
+    --checker1:#1e2230; --checker2:#141722;
+  }
+  [data-theme="light"]{
+    --bg:#f1f5f9; --bg-gradient:radial-gradient(ellipse at 50% 0%, #e0e7ff 0%, #f1f5f9 70%);
+    --panel:rgba(255, 255, 255, 0.85); --panel-solid:#ffffff;
+    --panel2:rgba(241, 245, 249, 0.9); --line:rgba(0, 0, 0, 0.08);
+    --line-glow:rgba(79, 70, 229, 0.2);
+    --text:#0f172a; --muted:#64748b; --accent:#4f46e5; --accent2:#7c3aed;
+    --accent-glow:rgba(79, 70, 229, 0.25); --ok:#059669; --err:#dc2626; --radius:12px;
+    --checker1:#e2e8f0; --checker2:#cbd5e1;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    background-image: var(--bg-gradient);
+    font-family:"Plus Jakarta Sans", -apple-system, system-ui, sans-serif;
+    font-size:13px; line-height:1.6; display:flex; flex-direction:column; overflow:hidden;
+    transition:background .25s ease, color .25s ease;
+  }
+  /* 自定义极简滚动条 */
+  ::-webkit-scrollbar{width:5px;height:5px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:10px}
+  ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.22)}
+
+  /* 顶部高奢 Glassmorphism Header */
+  header{
+    display:flex; align-items:center; gap:14px; flex:0 0 auto;
+    padding:12px 24px; background:var(--panel-solid);
+    backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
+    border-bottom:1px solid var(--line); z-index:20; transition:all .25s ease;
+  }
+  header .logo{
+    width:38px;height:38px;border-radius:10px;flex:0 0 auto;
+    background:linear-gradient(135deg, var(--accent), #38bdf8);
+    box-shadow:0 0 20px var(--accent-glow);
+    display:flex;align-items:center;justify-content:center;color:#fff;
+  }
+  header h1{font-size:15px;margin:0;font-weight:800;letter-spacing:0.5px;text-transform:uppercase;color:var(--text)}
+  header .sub{color:var(--muted);font-size:11px;font-family:'JetBrains Mono',monospace}
+  
+  /* 先锋三栏 Inspector 大格局架构 */
+  main#viewGen{
+    flex:1 1 auto; overflow-y:auto; width:100%;
+    display:grid; grid-template-columns:350px 1fr 340px; gap:16px; align-content:stretch;
+    padding:16px 20px; max-width:1720px; margin:0 auto;
+  }
+  @media (max-width:1200px){ main#viewGen{grid-template-columns:340px 1fr} .right-inspector{display:none} }
+  @media (max-width:840px){ main#viewGen{grid-template-columns:1fr} }
+  
+  .panel{
+    background:var(--panel); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+    border:1px solid var(--line); border-radius:var(--radius); padding:16px;
+    box-shadow:0 16px 36px rgba(0,0,0,0.15); transition:all .25s ease;
+    display:flex; flex-direction:column;
+  }
+  .panel:hover{border-color:rgba(255,255,255,0.14)}
+  .field{margin-bottom:14px}
+  label.t{
+    display:flex; align-items:center; gap:6px; font-size:11px; font-weight:700;
+    color:var(--muted); margin-bottom:6px; letter-spacing:0.6px; text-transform:uppercase;
+  }
+  label.t i{width:14px;height:14px;color:var(--accent)}
+
+  input[type=text],input[type=password],input[type=number],textarea,select{
+    width:100%; background:var(--panel2); color:var(--text);
+    border:1px solid var(--line); border-radius:9px; padding:9px 12px;
+    font-family:inherit; font-size:13px; outline:none; transition:all .2s ease;
+  }
+  input:focus,textarea:focus,select:focus{
+    border-color:var(--accent);
+    box-shadow:0 0 0 3px rgba(99, 102, 241, 0.25);
+  }
+  input:disabled,select:disabled{opacity:.35}
+  .secret{-webkit-text-security:disc}
+  textarea{resize:vertical; min-height:88px}
+  .row{display:flex; gap:10px}
+  .row>div{flex:1}
+  
+  /* 折叠设置区 */
+  details.settings{
+    border:1px solid var(--line); border-radius:11px;
+    background:rgba(24, 28, 42, 0.4); margin-bottom:14px; overflow:hidden;
+    transition:all .2s;
+  }
+  details.settings summary{
+    cursor:pointer; padding:10px 14px; font-weight:700; user-select:none;
+    list-style:none; display:flex; align-items:center; gap:8px; font-size:12px;
+    color:var(--text); transition:background .15s; letter-spacing:0.3px;
+  }
+  details.settings summary:hover{background:rgba(255,255,255,0.03)}
+  details.settings summary::before{content:"▸"; transition:.2s ease; color:var(--accent); font-size:14px}
+  details.settings[open] summary::before{transform:rotate(90deg)}
+  details.settings .inner{padding:4px 14px 14px}
+  .hint{font-size:11px; color:var(--muted); margin-top:5px; line-height:1.5}
+  
+  /* 先锋草图上传框 */
+  .drop{
+    border:1.5px dashed rgba(255,255,255,0.16); border-radius:12px; background:var(--panel2);
+    min-height:110px; display:flex; flex-direction:column; gap:8px;
+    align-items:center; justify-content:center; cursor:pointer;
+    text-align:center; padding:14px; transition:all .2s ease; position:relative;
+  }
+  .drop:hover,.drop.over{
+    border-color:var(--accent); background:rgba(38, 46, 68, 0.6);
+    box-shadow:0 0 20px rgba(99,102,241,0.18);
+  }
+  .drop img{max-width:100%; max-height:170px; border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,0.5)}
+  .drop .rm{
+    position:absolute; top:8px; right:8px; background:rgba(0,0,0,0.8); color:#fff;
+    border:1px solid var(--line); border-radius:8px; padding:4px 10px; cursor:pointer; font-size:11px;
+    backdrop-filter:blur(4px); transition:all .15s; display:flex; align-items:center; gap:4px;
+  }
+  .drop .rm:hover{background:var(--err)}
+
+  /* 先锋按钮体系 */
+  button.primary{
+    width:100%; padding:13px; border:none; border-radius:11px; cursor:pointer;
+    background:linear-gradient(135deg, var(--accent), var(--accent2));
+    box-shadow:0 4px 24px var(--accent-glow);
+    color:#fff; font-size:14px; font-weight:800; letter-spacing:0.5px; text-transform:uppercase;
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    transition:all .2s ease; position:relative; overflow:hidden;
+  }
+  button.primary:hover{transform:translateY(-1.5px); box-shadow:0 8px 30px rgba(139, 92, 246, 0.45)}
+  button.primary:active{transform:translateY(0)}
+  button.primary:disabled{opacity:.45; cursor:not-allowed; transform:none; box-shadow:none}
+  
+  button.ghost{
+    padding:8px 14px; border-radius:9px; cursor:pointer; font-family:inherit; font-size:12px; font-weight:600;
+    background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    transition:all .18s ease; display:inline-flex; align-items:center; gap:6px;
+  }
+  button.ghost:hover{border-color:var(--accent); background:rgba(45, 53, 76, 0.7); transform:translateY(-1px)}
+  button.ghost:active{transform:translateY(0)}
+  button.ghost:disabled{opacity:.3; cursor:not-allowed; transform:none}
+  button.ghost.active{
+    border-color:var(--accent); background:linear-gradient(135deg, rgba(99,102,241,0.28), rgba(139,92,246,0.28));
+    color:#fff; box-shadow:0 0 14px rgba(99,102,241,0.25);
+  }
+  .chip{padding:4px 12px; font-size:11px; border-radius:20px}
+  #resultImg.fixing{cursor:crosshair}
+
+  /* 工作台 Studio 垂直分栏布局 */
+  #editor{flex:1 1 auto; min-height:0; background:var(--bg); display:none; grid-template-columns:60px 1fr 330px; height:100%}
+  #editor.open{display:grid}
+  
+  /* 左侧垂直 Floating Toolbar */
+  #edBar{
+    display:flex; flex-direction:column; gap:10px; align-items:center; padding:16px 8px;
+    background:var(--panel-solid); backdrop-filter:blur(16px);
+    border-right:1px solid var(--line); z-index:10; overflow-y:auto; transition:all .25s ease;
+  }
+  #edBar .edtool{
+    width:42px; height:42px; padding:0; justify-content:center; border-radius:10px;
+  }
+  #edBar .edtool i{width:18px;height:18px}
+
+  .sep{width:24px; height:1px; background:var(--line); margin:4px 0}
+  #edViewport{flex:1; overflow:hidden; position:relative; touch-action:none; background:var(--bg)}
+  #edViewport canvas{position:absolute; left:0; top:0; transform-origin:0 0; image-rendering:pixelated}
+  #edMarquee{position:absolute; border:1.5px dashed #fff; background:rgba(99, 102, 241, 0.2); display:none;
+    pointer-events:none; z-index:2; box-shadow:0 0 12px rgba(99, 102, 241, 0.4)}
+  
+  /* 右侧 Inspector 控制栏 */
+  #edSidebar{
+    display:flex; flex-direction:column; gap:14px; padding:16px;
+    background:var(--panel-solid); backdrop-filter:blur(16px);
+    border-left:1px solid var(--line); overflow-y:auto; z-index:10; transition:all .25s ease;
+  }
+  
+  /* 底栏图库 */
+  #edGallery{
+    grid-column:1 / -1; display:flex; gap:12px; align-items:center; padding:10px 20px;
+    background:var(--panel-solid); backdrop-filter:blur(16px);
+    border-top:1px solid var(--line); overflow-x:auto; min-height:82px; transition:all .25s ease;
+  }
+  #edThumbs{display:flex; gap:8px}
+  #edThumbs img{
+    width:56px; height:56px; object-fit:cover; border-radius:10px; cursor:pointer;
+    border:2px solid transparent; background:#0008; flex:0 0 auto; transition:all .18s ease;
+  }
+  #edThumbs img:hover{border-color:var(--accent); transform:scale(1.06); box-shadow:0 4px 14px rgba(0,0,0,0.6)}
+  .tab.active{border-color:var(--accent); background:rgba(99, 102, 241, 0.25); color:#fff}
+  
+  .spinner{
+    width:16px;height:16px;border-radius:50%; flex:0 0 auto;
+    border:2px solid rgba(255,255,255,0.3); border-top-color:#fff; animation:spin .8s linear infinite;
+    display:none;
+  }
+  .busy .spinner{display:block}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  
+  /* 状态栏 */
+  #statusBox{
+    margin-top:12px; padding:10px 14px; border-radius:10px; font-size:12px; font-family:'JetBrains Mono',monospace;
+    display:none; word-break:break-all; white-space:pre-wrap; border:1px solid transparent;
+    animation:fadeIn .2s ease;
+  }
+  @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+  #statusBox.show{display:block}
+  #statusBox.info{background:rgba(30, 41, 59, 0.6); color:var(--muted); border-color:rgba(255,255,255,0.08)}
+  #statusBox.ok{background:rgba(6, 78, 59, 0.5); color:var(--ok); border-color:rgba(52, 211, 153, 0.25)}
+  #statusBox.err{background:rgba(127, 29, 29, 0.5); color:var(--err); border-color:rgba(248, 113, 113, 0.25)}
+  
+  /* 中央 Hero 巨幕展示区 */
+  .result-wrap{display:flex; flex-direction:column; gap:14px; height:100%}
+  .checker{
+    background:repeating-conic-gradient(var(--checker1) 0% 25%, var(--checker2) 0% 50%) 0 0/24px 24px;
+    border:1px solid var(--line); border-radius:var(--radius);
+    flex:1; display:flex; align-items:center; justify-content:center;
+    min-height:450px; overflow:hidden; position:relative;
+    box-shadow:inset 0 4px 16px rgba(0,0,0,0.2);
+  }
+  .checker .placeholder{color:#475569; text-align:center; font-size:13px; line-height:2; font-family:'JetBrains Mono',monospace}
+  .checker img{max-width:92%; max-height:580px; display:block; filter:drop-shadow(0 12px 32px rgba(0,0,0,0.6))}
+  .badge{
+    position:absolute; left:14px; top:14px; background:rgba(0,0,0,0.8); color:#e2e8f0;
+    font-size:11px; font-family:'JetBrains Mono',monospace; padding:4px 10px; border-radius:8px; display:none; border:1px solid var(--line);
+    backdrop-filter:blur(6px);
+  }
+  .actions{display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:center; padding:6px 0}
+  .tolbox{display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; font-weight:600}
+  .tolbox input[type=range]{width:120px; accent-color:var(--accent)}
+  
+  /* 历史图库 */
+  #history{display:flex; gap:8px; flex-wrap:wrap}
+  #history img{
+    width:56px;height:56px;object-fit:cover; border-radius:10px; cursor:pointer;
+    border:2px solid transparent; background:#0008; transition:all .18s ease;
+  }
+  #history img:hover{border-color:var(--accent); transform:scale(1.06); box-shadow:0 4px 12px rgba(0,0,0,0.4)}
+  #history img.active{border-color:var(--accent); box-shadow:0 0 14px var(--accent-glow)}
+  a.dl-primary{
+    background:linear-gradient(135deg, #10b981, #059669); border:none; color:#fff;
+    padding:9px 18px; border-radius:10px; cursor:pointer; font-family:inherit; font-weight:700;
+    text-decoration:none; display:inline-flex; align-items:center; gap:6px;
+    box-shadow:0 4px 16px rgba(16, 185, 129, 0.35); transition:all .18s ease;
+  }
+  a.dl-primary:hover{transform:translateY(-1px); box-shadow:0 6px 22px rgba(16, 185, 129, 0.5)}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><i data-lucide="sparkles"></i></div>
+  <div>
+    <h1>SKETCH2ASSET — PRO STUDIO</h1>
+    <div class="sub">AI ASSET GENERATOR & MATTING ENGINE</div>
+  </div>
+  <nav id="tabs" style="margin-left:auto;display:flex;gap:8px;align-items:center">
+    <button class="ghost tab active" data-view="gen"><i data-lucide="sparkles"></i> <span data-i18n="tabGen">生图</span></button>
+    <button class="ghost tab" data-view="edit"><i data-lucide="sliders"></i> <span data-i18n="tabEdit">工作台</span></button>
+    <button class="ghost tab" data-view="settings"><i data-lucide="settings"></i> <span data-i18n="tabSettings">设置</span></button>
+    <div style="width:1px;height:18px;background:var(--line);margin:0 4px"></div>
+    <button class="ghost" id="themeToggle" title="切换深色 / 浅色模式" style="padding:7px 10px"><i data-lucide="sun"></i></button>
+    <button class="ghost" id="langToggle" title="Switch Language / 切换语言" style="padding:6px 10px;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700">EN</button>
+  </nav>
+</header>
+
+<main id="viewGen">
+  <!-- ======== 左栏：PROMPT & SKETCH CORE ENGINE ======== -->
+  <section class="panel">
+    <div class="field">
+      <label class="t" data-i18n="sketchBase"><i data-lucide="image-plus"></i> 草图引导 (SKETCH BASE)</label>
+      <div class="drop" id="drop">
+        <div id="dropTip">
+          <i data-lucide="upload-cloud" style="width:28px;height:28px;color:var(--accent);margin-bottom:4px"></i>
+          <div data-i18n="dropText">点击选择图片或拖拽草图到此处</div>
+          <span class="hint" data-i18n="dropSub">支持 PNG / JPG / WebP，自动轻量压缩</span>
+        </div>
+        <img id="sketchPreview" style="display:none" alt="草图预览">
+        <button class="rm" id="btnRemoveSketch" style="display:none" title="移除草图"><i data-lucide="x"></i> <span data-i18n="btnRemove">移除</span></button>
+      </div>
+      <input type="file" id="fileInput" accept="image/*" hidden>
+    </div>
+
+    <div class="field">
+      <label class="t" data-i18n="promptTitle"><i data-lucide="terminal"></i> 提示词 (PROMPT COMMAND)</label>
+      <textarea id="prompt" data-i18n-ph="promptPh" placeholder="例如：一把奇幻风格的火焰长剑，游戏道具图标，金色剑柄，华丽装饰... (Ctrl+Enter 快速生成)"></textarea>
+    </div>
+
+    <button class="primary" id="btnGen"><span class="spinner"></span><span id="btnGenText"><i data-lucide="zap"></i> <span data-i18n="btnGenText">生成资产图</span></span></button>
+    <div id="statusBox"></div>
+  </section>
+
+  <!-- ======== 中栏：CENTER HERO STAGE (DISPLAY & ACTIONS) ======== -->
+  <section class="panel result-wrap">
+    <div class="checker" id="resultArea">
+      <div class="badge" id="badge">READY</div>
+      <div class="placeholder" id="placeholder">
+        <i data-lucide="layout-grid" style="width:36px;height:36px;color:#334155;margin-bottom:8px"></i>
+        <div data-i18n="placeholder">生成资产图将在此展示</div>
+      </div>
+      <img id="resultImg" style="display:none" alt="生成结果">
+    </div>
+    <div class="actions">
+      <button class="dl-primary" id="btnToEditor" disabled title="把当前图带进工作台进行 AI 抠图、精细修补、裁剪与导出"><i data-lucide="sliders"></i> <span data-i18n="btnToEditor">送入工作台</span></button>
+      <button class="ghost" id="btnOrig" disabled><i data-lucide="download"></i> <span data-i18n="btnOrig">下载原图</span></button>
+    </div>
+  </section>
+
+  <!-- ======== 右栏：INSPECTOR & PROJECT HUB ======== -->
+  <section class="panel right-inspector">
+    <details class="settings" id="settingsBox">
+      <summary data-i18n="apiSettings"><i data-lucide="key-round"></i> API 设置 (PROFILES)</summary>
+      <div class="inner">
+        <div class="field">
+          <label class="t" data-i18n="profScheme">配置方案</label>
+          <div id="profileChips" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label class="t" data-i18n="profNameLabel">方案名称</label>
+            <input type="text" id="profName" autocomplete="off" spellcheck="false" placeholder="例如：A站·gpt-image / B站·nano-banana">
+          </div>
+          <div class="field" style="flex:0 0 auto;display:flex;align-items:flex-end">
+            <button class="ghost" id="profDel" title="删除当前方案"><i data-lucide="trash-2"></i> <span data-i18n="btnDelete">删除</span></button>
+          </div>
+        </div>
+        <div class="field">
+          <label class="t">Base URL</label>
+          <input type="text" id="apiBase" autocomplete="off" spellcheck="false" placeholder="https://api.example.com">
+        </div>
+        <div class="field">
+          <label class="t">API Key</label>
+          <input type="text" id="apiKey" class="secret" autocomplete="off" spellcheck="false" placeholder="sk-...">
+        </div>
+        <div class="row">
+          <div class="field">
+            <label class="t" data-i18n="apiType">接口类型</label>
+            <select id="apiMode">
+              <option value="images" data-i18n-opt="optImages">图像接口 /images</option>
+              <option value="chat" data-i18n-opt="optChat">对话接口 /chat</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="t" data-i18n="modelName">模型名称</label>
+            <div style="display:flex;gap:6px">
+              <input type="text" id="apiModel" list="modelList" autocomplete="off" spellcheck="false" placeholder="gpt-image-1" style="flex:1;min-width:0">
+              <button class="ghost" id="btnFetchModels" style="white-space:nowrap;padding:6px 10px"><i data-lucide="refresh-cw"></i> <span data-i18n="btnFetch">拉取</span></button>
+            </div>
+            <datalist id="modelList"></datalist>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <div class="row">
+      <div class="field">
+        <label class="t" data-i18n="projLabel"><i data-lucide="folder-kanban"></i> 项目归档</label>
+        <select id="projSel"><option value="" data-i18n-opt="optUncat">未分类</option></select>
+      </div>
+      <div class="field" style="flex:0 0 auto;display:flex;align-items:flex-end;gap:4px">
+        <button class="ghost" id="projNew" title="新建项目"><i data-lucide="folder-plus"></i></button>
+        <button class="ghost" id="projRen" title="重命名项目"><i data-lucide="file-signature"></i></button>
+      </div>
+    </div>
+    <div class="field" id="projStyleBox" style="display:none">
+      <label class="t" data-i18n="projStyleLabel">项目风格描述</label>
+      <input type="text" id="projStylePrompt" autocomplete="off" spellcheck="false" placeholder="thick outlines, flat colors, fantasy style">
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label class="t" data-i18n="styleLabel"><i data-lucide="palette"></i> 美术风格</label>
+        <select id="style">
+          <option value="none" data-i18n-opt="styleDefault">默认（跟随提示词）</option>
+          <option value="pixel" data-i18n-opt="stylePixel">像素风 Pixel Art</option>
+          <option value="cartoon" data-i18n-opt="styleCartoon">美式卡通 Cartoon</option>
+          <option value="anime" data-i18n-opt="styleAnime">二次元 Anime</option>
+          <option value="lowpoly" data-i18n-opt="styleLowpoly">低多边形 Low Poly</option>
+          <option value="realistic" data-i18n-opt="styleRealistic">写实 Realistic</option>
+          <option value="watercolor" data-i18n-opt="styleWatercolor">水彩手绘 Watercolor</option>
+          <option value="cyberpunk" data-i18n-opt="styleCyberpunk">赛博朋克 Cyberpunk</option>
+          <option value="render3d" data-i18n-opt="styleRender3d">3D 渲染 3D Render</option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="t" data-i18n="sizeLabel"><i data-lucide="scaling"></i> 分辨率</label>
+        <select id="size">
+          <option value="auto" data-i18n-opt="sizeAuto">自动</option>
+          <option value="1024x1024">1024 × 1024</option>
+          <option value="1536x1024" data-i18n-opt="size1536x1024">1536 × 1024 横</option>
+          <option value="1024x1536" data-i18n-opt="size1024x1536">1024 × 1536 竖</option>
+          <option value="2048x2048">2048 × 2048</option>
+          <option value="custom" data-i18n-opt="sizeCustom">自定义…</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row" id="sizeCustomBox" style="display:none">
+      <div class="field">
+        <label class="t" data-i18n="sizeWLabel">自定义宽</label>
+        <input type="number" id="sizeW" min="64" max="4096" step="64" value="1024" autocomplete="off">
+      </div>
+      <div class="field">
+        <label class="t" data-i18n="sizeHLabel">自定义高</label>
+        <input type="number" id="sizeH" min="64" max="4096" step="64" value="1024" autocomplete="off">
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="t" data-i18n="bgLabel"><i data-lucide="pipette"></i> 生成背景</label>
+      <select id="bgSel">
+        <option value="white" data-i18n-opt="bgWhite">纯白（默认推荐）</option>
+        <option value="gray" data-i18n-opt="bgGray">中性灰</option>
+        <option value="black" data-i18n-opt="bgBlack">纯黑</option>
+        <option value="none" data-i18n-opt="bgNone">不指定</option>
+      </select>
+    </div>
+
+    <div style="margin-top:auto">
+      <label class="t" data-i18n="historyLabel"><i data-lucide="history"></i> 历史图库</label>
+      <div id="history"></div>
+    </div>
+  </section>
+</main>
+
+<!-- ======== 设置（独立模块） ======== -->
+<main id="viewSettings" style="display:none;grid-template-columns:1fr">
+  <section class="panel" style="max-width:680px;margin:0 auto">
+    <h3 style="margin:0 0 6px;display:flex;align-items:center;gap:8px"><i data-lucide="file-json" style="color:var(--accent)"></i> <span data-i18n="cfgTitle">导入 / 导出配置</span></h3>
+    <div class="hint" style="margin-bottom:14px" data-i18n="cfgHint">
+      导出内容：<b>API 配置方案</b>与<b>项目清单及其风格设定</b>。<br>
+      导入规则：<b>只新增、绝不覆盖</b>现有配置。
+    </div>
+    <div class="actions">
+      <button class="ghost" id="cfgExport"><i data-lucide="download"></i> <span data-i18n="cfgExportText">导出配置 JSON</span></button>
+      <button class="ghost" id="cfgImport"><i data-lucide="upload"></i> <span data-i18n="cfgImportText">导入配置 JSON</span></button>
+      <input type="file" id="cfgFile" accept=".json,application/json" hidden>
+    </div>
+    <div id="cfgStatus" class="hint" style="margin-top:10px;white-space:pre-wrap"></div>
+  </section>
+</main>
+
+<!-- ======== 工作台 STUDIO Pro ENGINE ======== -->
+<div id="editor">
+  <!-- 左侧 垂直 Tool Palette -->
+  <div id="edBar">
+    <button class="ghost edtool active" data-tool="pan" data-i18n-title="toolPan" title="移动画布 (Space/中键拖拽)"><i data-lucide="move"></i></button>
+    <button class="ghost edtool" data-tool="restore" data-i18n-title="toolRestore" title="按颜色点选恢复"><i data-lucide="sparkle"></i></button>
+    <button class="ghost edtool" data-tool="erase" data-i18n-title="toolErase" title="按颜色点选擦除"><i data-lucide="eraser"></i></button>
+    <div class="sep"></div>
+    <button class="ghost edtool" data-tool="brushR" data-i18n-title="toolBrushR" title="笔刷自由涂抹恢复"><i data-lucide="paintbrush"></i></button>
+    <button class="ghost edtool" data-tool="brushE" data-i18n-title="toolBrushE" title="笔刷自由涂抹擦除"><i data-lucide="square-slash"></i></button>
+    <div class="sep"></div>
+    <button class="ghost edtool" data-tool="crop" data-i18n-title="toolCrop" title="框选裁剪区域"><i data-lucide="crop"></i></button>
+  </div>
+
+  <!-- 中央 视口画布 Viewport -->
+  <div id="edViewport" class="checker">
+    <div id="edMarquee"></div>
+    <div style="position:absolute;top:14px;left:14px;z-index:5;display:flex;gap:6px;align-items:center;background:var(--panel);padding:4px 10px;border-radius:10px;border:1px solid var(--line);backdrop-filter:blur(8px);box-shadow:0 4px 16px rgba(0,0,0,0.1)">
+      <button class="ghost" id="edZoomOut" style="padding:2px 8px"><i data-lucide="minus"></i></button>
+      <span class="tolbox" id="edZoomLabel" style="font-family:'JetBrains Mono',monospace">100%</span>
+      <button class="ghost" id="edZoomIn" style="padding:2px 8px"><i data-lucide="plus"></i></button>
+      <button class="ghost" id="edFitBtn" style="padding:2px 8px"><i data-lucide="maximize-2"></i> <span data-i18n="edFit">适配</span></button>
+      <div class="sep" style="height:14px"></div>
+      <button class="ghost" id="edUndo" title="Ctrl+Z" style="padding:2px 8px"><i data-lucide="undo-2"></i> <span data-i18n="edUndo">撤销</span></button>
+      <button class="ghost" id="edTrim" title="自动裁掉四周多余透明边" style="padding:2px 8px"><i data-lucide="scissors"></i> <span data-i18n="edTrim">裁透明边</span></button>
+      <button class="ghost" id="edApplyCrop" style="display:none;padding:2px 8px;border-color:var(--accent)"><i data-lucide="check"></i> <span data-i18n="edApplyCrop">应用裁剪</span></button>
+    </div>
+  </div>
+
+  <!-- 右侧 属性 Inspector Sidebar -->
+  <div id="edSidebar">
+    <div style="font-weight:700;font-size:13px;letter-spacing:0.5px;color:var(--text);display:flex;align-items:center;gap:6px;margin-bottom:4px" data-i18n="inspectorTitle">
+      <i data-lucide="sliders-horizontal" style="color:var(--accent)"></i> INSPECTOR 属性控制
+    </div>
+
+    <!-- AI 抠图 Inspector 面板 -->
+    <div style="background:var(--panel2);padding:12px;border-radius:10px;border:1px solid var(--line);display:flex;flex-direction:column;gap:10px">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;display:flex;align-items:center;gap:6px" data-i18n="mattingCardTitle">
+        <i data-lucide="sparkles" style="width:13px;height:13px;color:var(--accent)"></i> AI 智能抠图引擎
+      </div>
+      <button class="primary" id="edMatting" style="font-size:13px;padding:10px"><i data-lucide="sparkles"></i> <span data-i18n="edMattingText">开始 AI 抠图</span></button>
+      
+      <div class="field" style="margin:0">
+        <label class="t" data-i18n="modelLabel"><i data-lucide="cpu" style="width:12px;height:12px"></i> 抠图模型</label>
+        <select id="modelSel" style="width:100%;padding:5px 8px"></select>
+      </div>
+
+      <div class="row">
+        <div class="field" style="margin:0">
+          <label class="t" data-i18n="devLabel">计算设备</label>
+          <select id="devSel" style="width:100%;padding:5px 8px">
+            <option value="auto" data-i18n-opt="devAuto">自动</option>
+            <option value="cpu">CPU</option>
+            <option value="gpu">GPU</option>
+          </select>
+        </div>
+        <div class="field" style="margin:0">
+          <label class="t" data-i18n="chokeLabel">收边像素</label>
+          <select id="edChoke" style="width:100%;padding:5px 8px">
+            <option value="0">0px</option><option value="1">1px</option>
+            <option value="2">2px</option><option value="3">3px</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <label class="tolbox" style="cursor:pointer" title="针对贴背景边缘与漏检强色块做补回处理">
+          <input type="checkbox" id="edEnh" style="accent-color:var(--accent)"> <span data-i18n="enhLabel">增强模式</span>
+        </label>
+      </div>
+      
+      <div id="engineInfo" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);line-height:1.4">检测中…</div>
+    </div>
+
+    <!-- 容差与笔刷滑块 -->
+    <div style="background:var(--panel2);padding:12px;border-radius:10px;border:1px solid var(--line);display:flex;flex-direction:column;gap:10px">
+      <span class="tolbox" style="justify-content:space-between">
+        <span data-i18n="tolLabel"><i data-lucide="disc" style="width:13px;height:13px"></i> 色彩容差</span>
+        <span id="edTolVal" style="font-family:'JetBrains Mono',monospace">34</span>
+      </span>
+      <input type="range" id="edTol" min="5" max="140" value="34">
+
+      <span class="tolbox" style="justify-content:space-between">
+        <span data-i18n="brushLabel"><i data-lucide="brush" style="width:13px;height:13px"></i> 笔刷大小</span>
+        <span id="edBrushVal" style="font-family:'JetBrains Mono',monospace">16</span>
+      </span>
+      <input type="range" id="edBrush" min="2" max="120" value="16">
+    </div>
+
+    <!-- 按分辨率导出面板 -->
+    <div style="background:var(--panel2);padding:12px;border-radius:10px;border:1px solid var(--line);display:flex;flex-direction:column;gap:10px">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase" data-i18n="exportCardTitle"><i data-lucide="share-2" style="width:13px;height:13px;color:var(--accent)"></i> 分辨率无损导出</div>
+      <div class="row">
+        <div class="field" style="margin:0"><label class="t" data-i18n="widthLabel">宽 (W)</label><input type="number" id="edW" min="1" max="8192" data-i18n-ph="autoPh" placeholder="自动"></div>
+        <div class="field" style="margin:0"><label class="t" data-i18n="heightLabel">高 (H)</label><input type="number" id="edH" min="1" max="8192" data-i18n-ph="autoPh" placeholder="自动"></div>
+      </div>
+      <label style="cursor:pointer;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="edKeepRatio" checked style="accent-color:var(--accent)"> <span data-i18n="keepRatioLabel">保持纵横比居中填充</span>
+      </label>
+      <button class="ghost" id="edExport" style="justify-content:center"><i data-lucide="file-output"></i> <span data-i18n="edExportText">按分辨率导出 PNG</span></button>
+    </div>
+
+    <!-- 底部操作按钮 -->
+    <div style="margin-top:auto;display:flex;flex-direction:column;gap:8px">
+      <div id="edStatus" style="font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace"></div>
+      <div class="row">
+        <button class="ghost" id="edSave" style="flex:1;justify-content:center" title="保存结果进图库 outputs/ 目录"><i data-lucide="save"></i> <span data-i18n="edSaveText">存进图库</span></button>
+        <button class="dl-primary" id="edDownload" style="flex:1;justify-content:center"><i data-lucide="download"></i> <span data-i18n="edDownloadText">下载 PNG</span></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 底部纯粹图库栏 -->
+  <div id="edGallery">
+    <span class="tolbox"><i data-lucide="folder" style="width:14px;height:14px;color:var(--accent)"></i> <span data-i18n="projLabel">项目</span>
+      <select id="edProjSel" style="width:auto;max-width:140px;padding:3px 6px">
+        <option value="_all" data-i18n-opt="optAll">全部</option>
+        <option value="" data-i18n-opt="optUncat">未分类</option>
+      </select>
+    </span>
+    <button class="ghost" id="edAssign" title="把图移入选中项目"><i data-lucide="folder-output"></i> <span data-i18n="edAssignText">移入项目</span></button>
+    <div class="sep"></div>
+    <button class="ghost" id="edImport"><i data-lucide="image"></i> <span data-i18n="edImportText">导入本地图片</span></button>
+    <input type="file" id="edFile" accept="image/*" hidden>
+    <button class="ghost" id="edRefreshGal"><i data-lucide="rotate-cw"></i></button>
+    <div class="sep"></div>
+    <div id="edThumbs"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+
+/* ---------------- 设置：多 API 配置方案，保存在 localStorage ---------------- */
+const SET_KEY = "s2a_settings_v1";
+const PROFILE_FIELDS = ["apiBase", "apiKey", "apiMode", "apiModel"];   // 随方案切换
+const globalIds = ["style", "size", "sizeW", "sizeH", "bgSel", "prompt", "edChoke"];  // 全局共享
+const globalChecks = ["edEnh"];
+let SET = { profiles: [], active: 0 };
+let personalStyle = null;      // 未分类时的个人风格选择（项目会临时覆盖风格下拉）
+let savedProjSel = "";         // 上次选中的项目
+
+function cur(){ return SET.profiles[SET.active]; }
+
+function loadSettings(){
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem(SET_KEY) || "{}"); } catch(e){}
+  if (Array.isArray(s.profiles) && s.profiles.length){
+    SET.profiles = s.profiles;
+    SET.active = Math.min(s.active || 0, s.profiles.length - 1);
+  } else {
+    // 旧版单配置自动迁移为第一个方案
+    SET.profiles = [{ name: s.apiBase ? "默认" : "方案1",
+                      apiBase: s.apiBase || "", apiKey: s.apiKey || "",
+                      apiMode: s.apiMode || "images", apiModel: s.apiModel || "",
+                      models: null }];
+    SET.active = 0;
+  }
+  globalIds.forEach(id => { if (s[id] !== undefined) $(id).value = s[id]; });
+  globalChecks.forEach(id => { if (s[id] !== undefined) $(id).checked = !!s[id]; });
+  if (s.bgSel === undefined && s.whiteBg !== undefined)   // 旧版白底开关迁移
+    $("bgSel").value = s.whiteBg ? "white" : "none";
+  if (!["white", "gray", "black", "none"].includes($("bgSel").value))
+    $("bgSel").value = "white";                            // 已移除的背景色(绿/蓝/品红/自定义)迁回白底
+  syncGenOpts();
+  personalStyle = $("style").value;
+  savedProjSel = s.projSel || "";
+  applyProfile();
+  if (!cur().apiKey) $("settingsBox").open = true;   // 当前方案没配过就展开设置
+}
+function saveSettings(){
+  const s = { profiles: SET.profiles, active: SET.active };
+  globalIds.forEach(id => s[id] = $(id).value);
+  globalChecks.forEach(id => s[id] = $(id).checked);
+  s.projSel = $("projSel").value;
+  localStorage.setItem(SET_KEY, JSON.stringify(s));
+}
+function applyProfile(){
+  const p = cur();
+  PROFILE_FIELDS.forEach(id => $(id).value = p[id] || "");
+  if (!p.apiMode) p.apiMode = "images";
+  $("apiMode").value = p.apiMode;
+  $("profName").value = p.name || "";
+  $("apiModel").placeholder = p.apiMode === "chat" ? "gemini-2.5-flash-image" : "gpt-image-1";
+  populateModels(Array.isArray(p.models) && p.models.length ? p.models : DEFAULT_MODELS);
+  renderChips();
+}
+function renderChips(){
+  const box = $("profileChips");
+  box.innerHTML = "";
+  SET.profiles.forEach((p, i) => {
+    const b = document.createElement("button");
+    b.className = "ghost chip" + (i === SET.active ? " active" : "");
+    b.textContent = p.name || ("方案" + (i + 1));
+    b.title = (p.apiBase || "未配置地址") + " · " +
+              (p.apiMode === "chat" ? "对话接口" : "图像接口") + " · " +
+              (p.apiModel || "默认模型");
+    b.addEventListener("click", () => {
+      if (SET.active === i) return;
+      SET.active = i;
+      applyProfile();
+      saveSettings();
+      setStatus("ok", "已切换到方案「" + (p.name || "方案" + (i + 1)) + "」");
+    });
+    box.appendChild(b);
+  });
+  const add = document.createElement("button");
+  add.className = "ghost chip";
+  add.textContent = "＋ 新增";
+  add.title = "新增一个空白 API 配置方案";
+  add.addEventListener("click", () => {
+    SET.profiles.push({ name: "方案" + (SET.profiles.length + 1),
+                        apiBase: "", apiKey: "",
+                        apiMode: cur().apiMode || "images", apiModel: "", models: null });
+    SET.active = SET.profiles.length - 1;
+    applyProfile();
+    saveSettings();
+    $("settingsBox").open = true;
+    $("apiBase").focus();
+  });
+  box.appendChild(add);
+}
+PROFILE_FIELDS.forEach(id => $(id).addEventListener("change", () => {
+  cur()[id] = $(id).value;
+  if (id === "apiMode")
+    $("apiModel").placeholder = $(id).value === "chat" ? "gemini-2.5-flash-image" : "gpt-image-1";
+  saveSettings();
+  renderChips();
+}));
+$("profName").addEventListener("change", () => {
+  const v = $("profName").value.trim();
+  if (v) cur().name = v;
+  $("profName").value = cur().name;
+  saveSettings();
+  renderChips();
+});
+$("profDel").addEventListener("click", () => {
+  if (SET.profiles.length <= 1) return setStatus("err", "至少保留一个方案");
+  const name = cur().name;
+  SET.profiles.splice(SET.active, 1);
+  SET.active = Math.max(0, SET.active - 1);
+  applyProfile();
+  saveSettings();
+  setStatus("ok", "已删除方案「" + name + "」，当前：" + cur().name);
+});
+globalIds.forEach(id => $(id).addEventListener("change", saveSettings));
+globalChecks.forEach(id => $(id).addEventListener("change", saveSettings));
+$("prompt").addEventListener("input", () => {
+  clearTimeout(saveSettings._t);
+  saveSettings._t = setTimeout(saveSettings, 400);
+});
+
+/* ---------------- 模型列表：每个方案独立记住自己拉取过的模型 ---------------- */
+const DEFAULT_MODELS = [
+  "gpt-image-1", "gpt-image-1-mini", "dall-e-3",
+  "gemini-2.5-flash-image", "gemini-3-pro-image-preview",
+  "doubao-seedream-4-0-250828", "qwen-image", "qwen-image-edit",
+  "hunyuan-image-3.0", "flux-kontext-pro", "flux-2-pro", "grok-2-image"
+];
+const IMG_HINT = /image|img|dall|flux|seedream|seededit|banana|imagen|stable|sdxl|sd3|midjourney|\bmj\b|kolors|cogview|wanx|hunyuan-image|ideogram|recraft|playground|pixart|photon|irag/i;
+
+function sortModels(ids){
+  const img = ids.filter(i => IMG_HINT.test(i));
+  const rest = ids.filter(i => !IMG_HINT.test(i));
+  return [...img, ...rest];
+}
+function populateModels(list){
+  const dl = $("modelList");
+  dl.innerHTML = "";
+  for (const id of list.slice(0, 800)){
+    const o = document.createElement("option");
+    o.value = id;
+    dl.appendChild(o);
+  }
+}
+loadSettings();   // 放在 DEFAULT_MODELS 之后调用: applyProfile 需要用它填充模型下拉
+
+$("btnFetchModels").addEventListener("click", async () => {
+  const apiBase = $("apiBase").value.trim(), apiKey = $("apiKey").value.trim();
+  if (!apiBase || !apiKey){
+    $("settingsBox").open = true;
+    return setStatus("err", "请先填写 API 地址和 Key，再拉取模型列表");
+  }
+  const btn = $("btnFetchModels");
+  btn.disabled = true;
+  btn.textContent = "拉取中…";
+  try {
+    const r = await fetch("/api/models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiBase, apiKey })
+    });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    const sorted = sortModels(d.models);
+    populateModels(sorted);
+    cur().models = sorted;          // 模型列表随方案保存
+    saveSettings();
+    const nImg = sorted.filter(i => IMG_HINT.test(i)).length;
+    setStatus("ok", "已从你的 API 拉取 " + d.models.length + " 个模型，其中疑似出图模型 " +
+                    nImg + " 个（已排在下拉最前）。清空模型输入框后点击输入框即可浏览选择。");
+  } catch (err) {
+    setStatus("err", "拉取模型失败：" + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🔄 拉取";
+  }
+});
+
+/* ---------------- 草图上传（点击 / 拖拽 / 粘贴） ---------------- */
+let sketchDataUrl = null;
+const drop = $("drop");
+drop.addEventListener("click", e => { if (e.target.id !== "btnRemoveSketch") $("fileInput").click(); });
+$("fileInput").addEventListener("change", e => { if (e.target.files[0]) acceptFile(e.target.files[0]); e.target.value = ""; });
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => {
+  e.preventDefault(); drop.classList.remove("over");
+  const f = [...e.dataTransfer.files].find(f => f.type.startsWith("image/"));
+  if (f) acceptFile(f);
+});
+document.addEventListener("paste", e => {
+  const it = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith("image/"));
+  if (it) acceptFile(it.getAsFile());
+});
+$("btnRemoveSketch").addEventListener("click", e => {
+  e.stopPropagation();
+  sketchDataUrl = null;
+  $("sketchPreview").style.display = "none";
+  $("btnRemoveSketch").style.display = "none";
+  $("dropTip").style.display = "";
+});
+
+function acceptFile(file){
+  const rd = new FileReader();
+  rd.onload = () => downscale(rd.result, 1536).then(url => {
+    sketchDataUrl = url;
+    $("sketchPreview").src = url;
+    $("sketchPreview").style.display = "";
+    $("btnRemoveSketch").style.display = "";
+    $("dropTip").style.display = "none";
+  });
+  rd.readAsDataURL(file);
+}
+function downscale(dataUrl, maxSide){
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => {
+      const m = Math.max(img.naturalWidth, img.naturalHeight);
+      if (m <= maxSide) return res(dataUrl);
+      const k = maxSide / m;
+      const cv = document.createElement("canvas");
+      cv.width = Math.round(img.naturalWidth * k);
+      cv.height = Math.round(img.naturalHeight * k);
+      cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+      res(cv.toDataURL("image/png"));
+    };
+    img.src = dataUrl;
+  });
+}
+
+/* ---------------- 分辨率 / 背景选项 ---------------- */
+function syncGenOpts(){
+  $("sizeCustomBox").style.display = $("size").value === "custom" ? "" : "none";
+}
+$("size").addEventListener("change", syncGenOpts);
+
+function effSize(){
+  if ($("size").value !== "custom") return $("size").value;
+  const w = Math.max(64, Math.min(4096, parseInt($("sizeW").value, 10) || 1024));
+  const h = Math.max(64, Math.min(4096, parseInt($("sizeH").value, 10) || 1024));
+  return w + "x" + h;
+}
+
+/* ---------------- 提示词组装 ---------------- */
+const STYLE_SUFFIX = {
+  none:       "",
+  pixel:      "pixel art style, 16-bit retro game sprite, crisp clean pixels",
+  cartoon:    "cartoon style, bold outlines, vibrant flat colors, stylized game art",
+  anime:      "anime style, cel shading, clean line art, Japanese game illustration",
+  lowpoly:    "low poly 3D style, flat shaded polygons, stylized game asset",
+  realistic:  "realistic detailed digital painting, PBR material feel, AAA game concept art",
+  watercolor: "hand-painted watercolor style, soft edges, storybook game art",
+  cyberpunk:  "cyberpunk style, neon glow accents, dark sci-fi game asset",
+  render3d:   "high quality 3D render, soft studio lighting, polished game asset"
+};
+const BG_WORDS = {
+  white: "pure white",
+  gray:  "flat neutral gray studio",
+  black: "pure black studio"
+};
+function buildPrompt(){
+  let p = $("prompt").value.trim();
+  if (!p && sketchDataUrl) p = "Turn this sketch into a polished game asset.";
+  if (sketchDataUrl) p = "Use the uploaded sketch as the base: keep its shape, pose and proportions, and redraw it as a finished game asset. " + p;
+  const st = STYLE_SUFFIX[$("style").value];
+  if (st) p += ", " + st;
+  const proj = projActive();
+  if (proj && proj.stylePrompt) p += ", " + proj.stylePrompt;   // 项目统一风格描述
+  const bg = $("bgSel").value;
+  if (bg && bg !== "none" && BG_WORDS[bg]){
+    p += ", isolated on a plain " + BG_WORDS[bg] + " background, centered, complete object fully in frame, no shadow, no watermark, no text";
+  }
+  // 对话接口没有硬性尺寸参数: 把比例与高清要求写进提示词尽力约束
+  if ($("apiMode").value === "chat"){
+    const s = effSize();
+    if (s !== "auto"){
+      const [w, h] = s.split("x").map(Number);
+      const gcd = (a, b) => b ? gcd(b, a % b) : a;
+      const d = gcd(w, h) || 1;
+      p += ", " + (w / d) + ":" + (h / d) + " aspect ratio" +
+           (Math.max(w, h) >= 2048 ? ", high resolution, fine details" : "");
+    }
+  }
+  return p;
+}
+
+/* ---------------- 状态提示 ---------------- */
+function setStatus(kind, text){
+  const b = $("statusBox");
+  if (!kind){ b.className = ""; return; }
+  b.className = "show " + kind;
+  b.textContent = text;
+}
+
+/* ---------------- 生成 ---------------- */
+let currentOriginal = null;      // 当前原图 dataURL
+let currentOriginalUrl = null;   // 当前原图在图库里的路径（有则可随图带入工作台移动）
+let busy = false, timerId = null;
+
+$("btnGen").addEventListener("click", generate);
+$("prompt").addEventListener("keydown", e => { if (e.ctrlKey && e.key === "Enter") generate(); });
+
+async function generate(){
+  if (busy) return;
+  if (!$("apiBase").value.trim() || !$("apiKey").value.trim()){
+    $("settingsBox").open = true;
+    return setStatus("err", "请先在「API 设置」里填写 API 地址和 Key");
+  }
+  if (!$("prompt").value.trim() && !sketchDataUrl)
+    return setStatus("err", "请填写提示词，或上传一张草图");
+
+  const payload = {
+    apiBase: $("apiBase").value.trim(),
+    apiKey:  $("apiKey").value.trim(),
+    mode:    $("apiMode").value,
+    model:   $("apiModel").value.trim(),
+    prompt:  buildPrompt(),
+    size:    effSize(),
+    image:   sketchDataUrl,
+    project: $("projSel").value
+  };
+  console.log("最终提示词:", payload.prompt);
+
+  busy = true;
+  $("btnGen").disabled = true;
+  $("btnGen").classList.add("busy");
+  $("btnGenText").textContent = "生成中…";
+  const t0 = performance.now();
+  timerId = setInterval(() =>
+    setStatus("info", "生成中… 已用 " + ((performance.now() - t0) / 1000).toFixed(1) + " 秒（图像生成通常需要 10~90 秒）"), 200);
+
+  try {
+    const r = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    showResult(data.image, true);
+    currentOriginalUrl = data.saved || null;
+    loadProjects();               // 刷新项目图片计数
+    setStatus("ok", "生成成功 · 走的接口: " + (data.via || "?") +
+                    ($("projSel").value ? " · 已归档到「" + $("projSel").value + "」" : "") +
+                    " · 用时 " + secs + " 秒");
+  } catch (err) {
+    setStatus("err", "生成失败：" + err.message);
+  } finally {
+    busy = false;
+    clearInterval(timerId);
+    $("btnGen").disabled = false;
+    $("btnGen").classList.remove("busy");
+    $("btnGenText").textContent = "✨ 生成资产图";
+  }
+}
+
+/* ---------------- 结果显示 + 历史 ---------------- */
+function showResult(dataUrl, pushHistory){
+  currentOriginal = dataUrl;
+  $("resultImg").src = dataUrl;
+  $("resultImg").style.display = "";
+  $("placeholder").style.display = "none";
+  $("btnOrig").disabled = false;
+  $("btnToEditor").disabled = false;
+  if (pushHistory) addHistory(dataUrl);
+  markActiveHistory(dataUrl);
+}
+function addHistory(url){
+  const im = document.createElement("img");
+  im.src = url;
+  im.title = "点击回看这张";
+  im.addEventListener("click", async () => {
+    showResult(await toDataUrl(url), false);
+    currentOriginalUrl = url.startsWith("data:") ? null : url;
+  });
+  const h = $("history");
+  h.prepend(im);
+  while (h.children.length > 18) h.lastChild.remove();
+}
+async function toDataUrl(url){
+  if (url.startsWith("data:")) return url;
+  const blob = await (await fetch(url)).blob();
+  return await new Promise(res => {
+    const rd = new FileReader();
+    rd.onload = () => res(rd.result);
+    rd.readAsDataURL(blob);
+  });
+}
+// 启动时从服务端加载落盘的生成历史（按当前项目筛选）
+function reloadHistory(){
+  const proj = encodeURIComponent($("projSel").value || "");
+  return fetch("/api/history?project=" + proj)
+    .then(r => r.json())
+    .then(d => {
+      $("history").innerHTML = "";
+      (d.items || []).slice(0, 18).reverse().forEach(u => addHistory(u));
+    })
+    .catch(() => {});
+}
+
+/* ---------------- 项目：归档 + 风格统一 + 筛选 ---------------- */
+let PROJECTS = [];   // [{name, style, stylePrompt, count}]
+
+function projActive(){
+  return $("projSel").value ? PROJECTS.find(p => p.name === $("projSel").value) : null;
+}
+async function loadProjects(){
+  try {
+    const d = await (await fetch("/api/projects")).json();
+    PROJECTS = d.projects || [];
+  } catch (e){ PROJECTS = []; }
+  const build = (sel, withAll) => {
+    const want = sel.value || (sel === $("projSel") ? savedProjSel : sel.value);
+    sel.innerHTML = "";
+    if (withAll) sel.appendChild(new Option("全部", "_all"));
+    sel.appendChild(new Option("未分类", ""));
+    for (const p of PROJECTS)
+      sel.appendChild(new Option(p.name + "（" + p.count + "）", p.name));
+    if ([...sel.options].some(o => o.value === want)) sel.value = want;
+  };
+  build($("projSel"), false);
+  build($("edProjSel"), true);
+  syncProjectUI();
+}
+function syncProjectUI(){
+  const p = projActive();
+  $("projStyleBox").style.display = p ? "" : "none";
+  if (p){
+    $("style").value = p.style || "none";
+    $("projStylePrompt").value = p.stylePrompt || "";
+  } else if (personalStyle !== null){
+    $("style").value = personalStyle;
+  }
+}
+$("projSel").addEventListener("change", () => {
+  savedProjSel = $("projSel").value;
+  saveSettings();
+  syncProjectUI();
+  reloadHistory();
+});
+$("projNew").addEventListener("click", async () => {
+  const name = (window.prompt("项目名称（中英文/数字/空格/-/_，不超过40字）：") || "").trim();
+  if (!name) return;
+  try {
+    const r = await fetch("/api/projects", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, style: $("style").value, stylePrompt: "" }) });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    savedProjSel = name;
+    $("projSel").value = "";
+    await loadProjects();
+    saveSettings();
+    reloadHistory();
+    setStatus("ok", "已创建项目「" + name + "」：之后的生图会归档到该项目并沿用其风格设定");
+  } catch (err) {
+    setStatus("err", "创建项目失败：" + err.message);
+  }
+});
+$("projRen").addEventListener("click", async () => {
+  const p = projActive();
+  if (!p) return setStatus("err", "先在「项目」下拉里选中要重命名的项目");
+  const name = (window.prompt("新的项目名称：", p.name) || "").trim();
+  if (!name || name === p.name) return;
+  try {
+    const r = await fetch("/api/projects/rename", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ old: p.name, new: name }) });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    savedProjSel = name;
+    $("projSel").value = "";
+    await loadProjects();
+    saveSettings();
+    reloadHistory();
+    setStatus("ok", "项目已重命名为「" + name + "」（目录与已归档图片同步迁移）");
+  } catch (err) {
+    setStatus("err", "重命名失败：" + err.message);
+  }
+});
+let projSaveT = null;
+function upsertProject(){
+  const p = projActive();
+  if (!p) return;
+  p.style = $("style").value;
+  p.stylePrompt = $("projStylePrompt").value;
+  clearTimeout(projSaveT);
+  projSaveT = setTimeout(() => {
+    fetch("/api/projects", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: p.name, style: p.style, stylePrompt: p.stylePrompt })
+    }).catch(() => {});
+  }, 500);
+}
+$("style").addEventListener("change", () => {
+  if (projActive()) upsertProject();
+  else personalStyle = $("style").value;
+});
+$("projStylePrompt").addEventListener("input", upsertProject);
+
+loadProjects().then(reloadHistory);
+
+/* ---------------- 设置页：配置导入 / 导出（只新增，重名自动改名） ---------------- */
+function mergeProfiles(existing, incoming){
+  // 纯函数: 计算要新增的 API 方案, 不修改 existing。完全相同的跳过, 仅重名的加 -2/-3 后缀
+  const names = new Set(existing.map(p => p.name));
+  const same = (a, b) => ["apiBase", "apiKey", "apiMode", "apiModel"]
+    .every(k => (a[k] || "") === (b[k] || ""));
+  const added = [], report = { add: 0, skip: 0, ren: 0 };
+  for (const raw of (incoming || [])){
+    if (!raw || typeof raw !== "object") continue;
+    const p = { name: String(raw.name || "导入方案"),
+                apiBase: raw.apiBase || "", apiKey: raw.apiKey || "",
+                apiMode: raw.apiMode === "chat" ? "chat" : "images",
+                apiModel: raw.apiModel || "",
+                models: Array.isArray(raw.models) ? raw.models : null };
+    if (existing.concat(added).some(e => same(e, p))){ report.skip++; continue; }
+    let nm = p.name, k = 2;
+    while (names.has(nm)) nm = p.name + "-" + (k++);
+    if (nm !== p.name) report.ren++;
+    p.name = nm;
+    names.add(nm);
+    added.push(p);
+    report.add++;
+  }
+  return { added, report };
+}
+function planProjectImports(existing, incoming){
+  // 纯函数: 计算要在服务端新建的项目。风格设定完全相同的跳过, 仅重名的加 -2/-3 后缀
+  const names = new Set(existing.map(p => p.name));
+  const plan = [], report = { add: 0, skip: 0, ren: 0 };
+  for (const raw of (incoming || [])){
+    if (!raw || typeof raw !== "object" || !raw.name) continue;
+    const style = raw.style || "none", sp = raw.stylePrompt || "";
+    const ex = existing.find(e => e.name === raw.name);
+    if (ex && (ex.style || "none") === style && (ex.stylePrompt || "") === sp){ report.skip++; continue; }
+    let nm = String(raw.name), k = 2;
+    while (names.has(nm)) nm = String(raw.name) + "-" + (k++);
+    if (nm !== raw.name) report.ren++;
+    names.add(nm);
+    plan.push({ name: nm, style, stylePrompt: sp });
+    report.add++;
+  }
+  return { plan, report };
+}
+$("cfgExport").addEventListener("click", () => {
+  const data = {
+    app: "sketch2asset", version: 1, exportedAt: new Date().toISOString(),
+    profiles: SET.profiles,
+    projects: PROJECTS.map(p => ({ name: p.name, style: p.style, stylePrompt: p.stylePrompt }))
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const t = new Date(), z = n => String(n).padStart(2, "0");
+  triggerDownload(URL.createObjectURL(blob),
+    "sketch2asset_config_" + t.getFullYear() + z(t.getMonth() + 1) + z(t.getDate()) + ".json");
+  $("cfgStatus").textContent = "已导出 " + SET.profiles.length + " 个 API 方案、" +
+                               PROJECTS.length + " 个项目的风格设定。";
+});
+$("cfgImport").addEventListener("click", () => $("cfgFile").click());
+$("cfgFile").addEventListener("change", async e => {
+  const f = e.target.files[0];
+  e.target.value = "";
+  if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    if (data.app !== "sketch2asset") throw new Error("不是本工具导出的配置文件");
+    const pm = mergeProfiles(SET.profiles, data.profiles);
+    SET.profiles.push(...pm.added);
+    saveSettings();
+    renderChips();
+    await loadProjects();
+    const jp = planProjectImports(PROJECTS, data.projects);
+    let jFail = 0;
+    for (const item of jp.plan){
+      try {
+        const r = await fetch("/api/projects", { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(item) });
+        if ((await r.json()).error) jFail++;
+      } catch (err){ jFail++; }
+    }
+    await loadProjects();
+    reloadHistory();
+    $("cfgStatus").textContent =
+      "导入完成：\nAPI 方案 — 新增 " + pm.report.add + "（其中改名 " + pm.report.ren +
+      "），相同跳过 " + pm.report.skip +
+      "\n项目 — 新增 " + (jp.report.add - jFail) + "（其中改名 " + jp.report.ren +
+      "），相同跳过 " + jp.report.skip + (jFail ? "，失败 " + jFail : "");
+  } catch (err) {
+    $("cfgStatus").textContent = "导入失败：" + err.message;
+  }
+});
+function markActiveHistory(url){
+  [...$("history").children].forEach(im => im.classList.toggle("active", im.src === url));
+}
+
+/* ---------------- 抠图引擎：模型 / 设备选择（工作台底栏） ---------------- */
+let mattingAvail = false, mattingModel = "", mattingProvider = null, enginePoll = null;
+async function refreshEngine(){
+  try {
+    const st = await (await fetch("/api/matting/status")).json();
+    const ms = await (await fetch("/api/matting/models")).json();
+    mattingAvail = !!st.available;
+    mattingModel = st.model || "";
+    mattingProvider = st.provider || null;
+    $("devSel").value = st.device || "auto";
+    const sel = $("modelSel");
+    sel.innerHTML = "";
+    for (const m of (ms.models || [])){
+      const o = document.createElement("option");
+      o.value = m.name;
+      o.textContent = m.name + (m.downloaded ? "" : (currentLang === "en" ? " (Not Downloaded)" : "（未下载·选中即下载）"));
+      o.title = m.desc || "";
+      if (m.active) o.selected = true;
+      sel.appendChild(o);
+    }
+    const prov = mattingProvider
+      ? (mattingProvider.startsWith("Dml") ? "GPU·DirectML"
+       : mattingProvider.startsWith("CUDA") ? "GPU·CUDA" : "CPU")
+      : (currentLang === "en" ? "Pending First Run" : "待首次运行");
+    clearTimeout(enginePoll);
+    if (ms.downloading){
+      sel.disabled = true;
+      $("engineInfo").textContent = (currentLang === "en" ? "⬇ Downloading " : "⬇ 正在下载 ") + ms.downloading + "：" + (ms.progress || "");
+      enginePoll = setTimeout(refreshEngine, 2000);
+    } else {
+      sel.disabled = false;
+      $("engineInfo").textContent = mattingAvail
+        ? ((currentLang === "en" ? "Engine Ready · " : "引擎就绪 · ") + prov + (ms.error ? " · ⚠ " + ms.error : ""))
+        : (currentLang === "en" ? "AI Matting missing. Run 'python setup_matting.py'" : "AI 未安装：命令行运行 python setup_matting.py");
+    }
+  } catch (e) {}
+}
+refreshEngine();
+$("modelSel").addEventListener("change", async () => {
+  try {
+    const r = await fetch("/api/matting/model", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: $("modelSel").value }) });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    edMsg(d.downloading
+      ? "开始后台下载 " + d.downloading + "，完成后自动启用（进度见下方状态）"
+      : "已切换模型，下次抠图生效（首次会重新加载模型）");
+  } catch (err) {
+    edMsg("切换模型失败：" + err.message);
+  }
+  refreshEngine();
+});
+$("devSel").addEventListener("change", async () => {
+  try {
+    const r = await fetch("/api/matting/device", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device: $("devSel").value }) });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    edMsg("设备已切换为 " + $("devSel").value + "，下次抠图生效");
+  } catch (err) {
+    edMsg("切换设备失败：" + err.message);
+  }
+  refreshEngine();
+});
+
+$("btnOrig").addEventListener("click", () => {
+  if (currentOriginal) downloadDataUrl(currentOriginal, fileName(""));
+});
+async function downloadDataUrl(dataUrl, name){
+  const blob = await (await fetch(dataUrl)).blob();
+  triggerDownload(URL.createObjectURL(blob), name);
+}
+
+/* ---------------- 工作台共享的画布状态 ---------------- */
+let procCanvas = null, procCtx = null, procData = null;   // 当前编辑结果（可编辑）
+let origCanvas = null, origFix = null;                     // 原图层（修补/抠图参考）
+
+/**
+ * 点选修补：以点击处的"原图颜色"为种子做泛洪选区（容差控制扩散范围）。
+ * 恢复模式只作用于当前透明的像素（把误删的找回来），
+ * 擦除模式只作用于当前不透明的像素（把残留擦掉），互不越界。
+ */
+function applyFix(orig, proc, w, h, sx, sy, tol, mode){
+  const o = orig.data ? orig.data : orig, p = proc.data ? proc.data : proc;
+  const wantTransparent = (mode === "restore");
+  const okA = i => wantTransparent ? p[i + 3] < 128 : p[i + 3] >= 128;
+  const si = (sy * w + sx) * 4;
+  if (!okA(si)) return 0;
+  const sr = o[si], sg = o[si + 1], sb = o[si + 2];
+  const T = tol * tol * 3;
+  const match = i => {
+    const dr = o[i] - sr, dg = o[i + 1] - sg, db = o[i + 2] - sb;
+    return dr * dr + dg * dg + db * db <= T;
+  };
+  const seen = new Uint8Array(w * h);
+  const stack = new Int32Array(w * h);
+  let sp = 0, count = 0;
+  const start = sy * w + sx;
+  seen[start] = 1; stack[sp++] = start;
+  while (sp){
+    const q = stack[--sp], i = q * 4;
+    if (!okA(i) || !match(i)) continue;
+    if (mode === "restore"){ p[i] = o[i]; p[i+1] = o[i+1]; p[i+2] = o[i+2]; p[i+3] = 255; }
+    else { p[i + 3] = 0; }
+    count++;
+    const x = q % w, y = (q / w) | 0;
+    if (x > 0     && !seen[q-1]){ seen[q-1] = 1; stack[sp++] = q-1; }
+    if (x < w-1   && !seen[q+1]){ seen[q+1] = 1; stack[sp++] = q+1; }
+    if (y > 0     && !seen[q-w]){ seen[q-w] = 1; stack[sp++] = q-w; }
+    if (y < h-1   && !seen[q+w]){ seen[q+w] = 1; stack[sp++] = q+w; }
+  }
+  return count;
+}
+
+function loadImage(url){
+  return new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = () => rej(new Error("图片加载失败"));
+    im.src = url;
+  });
+}
+
+/**
+ * 纯色背景抠图（三段式）：
+ * 1. 统计图片四边像素，取出现最多的颜色作为背景色
+ * 2. 对"颜色接近背景"的像素做连通域分析：
+ *    - 连到图片边缘的连通域 = 外部背景，移除
+ *    - 被主体包住的封闭连通域（内部背景/孔洞）达到最小面积也移除（可用开关关闭），
+ *      小面积的当作主体高光保留
+ * 3. 去白边：对移除区域边缘 3px 内的过渡像素，取邻域中离背景色最远的颜色作前景参考 F，
+ *    按颜色投影 α=(C-B)·(F-B)/|F-B|² 估计真实透明度，再反解 (C-(1-α)B)/α
+ *    还原被背景色污染前的前景色
+ */
+function removeBackground(img, tol, removeHoles){
+  const cv = document.createElement("canvas");
+  cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+  const ctx = cv.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0);
+  const id = ctx.getImageData(0, 0, cv.width, cv.height);
+  removeBgCore(id.data, cv.width, cv.height, tol, removeHoles);
+  ctx.putImageData(id, 0, 0);
+  return cv;
+}
+
+function removeBgCore(d, w, h, tol, removeHoles){
+  const n = w * h;
+
+  // ---- 1) 背景色估计：四边像素直方图（16 级量化取众数桶的均值） ----
+  const buckets = new Map();
+  const feed = (x, y) => {
+    const i = (y * w + x) * 4;
+    const key = (d[i] >> 4 << 8) | (d[i+1] >> 4 << 4) | (d[i+2] >> 4);
+    let b = buckets.get(key);
+    if (!b) buckets.set(key, b = { n:0, r:0, g:0, bl:0 });
+    b.n++; b.r += d[i]; b.g += d[i+1]; b.bl += d[i+2];
+  };
+  for (let x = 0; x < w; x++){ feed(x, 0); feed(x, h-1); }
+  for (let y = 0; y < h; y++){ feed(0, y); feed(w-1, y); }
+  let best = null;
+  for (const b of buckets.values()) if (!best || b.n > best.n) best = b;
+  const bR = best.r / best.n, bG = best.g / best.n, bB = best.bl / best.n;
+
+  const tol2 = tol * tol * 3;
+  const dist2 = i => {
+    const dr = d[i] - bR, dg = d[i+1] - bG, db = d[i+2] - bB;
+    return dr*dr + dg*dg + db*db;
+  };
+
+  // ---- 2) 背景候选像素的连通域分析 ----
+  const label = new Int32Array(n);         // 0 = 非候选, 否则连通域编号
+  const stack = new Int32Array(n);
+  const compArea = [], compBorder = [];
+  for (let p = 0; p < n; p++){
+    if (label[p] || dist2(p * 4) > tol2) continue;
+    const cid = compArea.length + 1;
+    let area = 0, border = false, sp = 0;
+    label[p] = cid; stack[sp++] = p;
+    while (sp){
+      const q = stack[--sp]; area++;
+      const x = q % w, y = (q / w) | 0;
+      if (x === 0 || y === 0 || x === w-1 || y === h-1) border = true;
+      if (x > 0     && !label[q-1] && dist2((q-1)*4) <= tol2){ label[q-1] = cid; stack[sp++] = q-1; }
+      if (x < w-1   && !label[q+1] && dist2((q+1)*4) <= tol2){ label[q+1] = cid; stack[sp++] = q+1; }
+      if (y > 0     && !label[q-w] && dist2((q-w)*4) <= tol2){ label[q-w] = cid; stack[sp++] = q-w; }
+      if (y < h-1   && !label[q+w] && dist2((q+w)*4) <= tol2){ label[q+w] = cid; stack[sp++] = q+w; }
+    }
+    compArea.push(area); compBorder.push(border);
+  }
+  const minArea = Math.max(12, Math.round(n * 0.00003));   // 小于此面积的封闭浅色块当高光保留
+  const removed = new Uint8Array(n);
+  for (let p = 0; p < n; p++){
+    const L = label[p];
+    if (L && (compBorder[L-1] || (removeHoles && compArea[L-1] >= minArea))){
+      removed[p] = 1;
+      d[p*4 + 3] = 0;
+    }
+  }
+
+  // ---- 3) 边缘 α 反解 + 去白边（只处理移除区边缘 3px 内的过渡带） ----
+  const orig = new Uint8ClampedArray(d);   // 前景参考必须用原始颜色
+  const odist2 = i => {
+    const dr = orig[i] - bR, dg = orig[i+1] - bG, db = orig[i+2] - bB;
+    return dr*dr + dg*dg + db*db;
+  };
+  const unmix = p => {
+    const i = p * 4, x = p % w, y = (p / w) | 0;
+    let fi = i, fd = odist2(i);            // 邻域(含自己)里离背景最远的颜色 = 前景参考 F
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++){
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      const np = ny * w + nx;
+      if (removed[np]) continue;
+      const D = odist2(np * 4);
+      if (D > fd){ fd = D; fi = np * 4; }
+    }
+    const fr = orig[fi] - bR, fg = orig[fi+1] - bG, fb = orig[fi+2] - bB;
+    const den = fr*fr + fg*fg + fb*fb;
+    let a;
+    if (den < 1e-6){
+      a = odist2(i) > tol2 ? 1 : 0;        // 邻域全是背景色: 按距离硬判
+    } else {
+      a = ((orig[i] - bR) * fr + (orig[i+1] - bG) * fg + (orig[i+2] - bB) * fb) / den;
+    }
+    if (a <= 0.06){ d[i+3] = 0; return; }
+    if (a >= 0.94) return;                 // 接近实心, 保持原样
+    d[i]   = (orig[i]   - (1 - a) * bR) / a;   // Uint8ClampedArray 自动截断取整
+    d[i+1] = (orig[i+1] - (1 - a) * bG) / a;
+    d[i+2] = (orig[i+2] - (1 - a) * bB) / a;
+    d[i+3] = a * 255;
+  };
+  const ring = new Uint8Array(n);
+  let frontier = [];
+  for (let p = 0; p < n; p++){             // 起点: 移除区里贴着保留区的像素
+    if (!removed[p]) continue;
+    const x = p % w, y = (p / w) | 0;
+    if ((x > 0 && !removed[p-1]) || (x < w-1 && !removed[p+1]) ||
+        (y > 0 && !removed[p-w]) || (y < h-1 && !removed[p+w])) frontier.push(p);
+  }
+  for (let dist = 1; dist <= 3 && frontier.length; dist++){
+    const next = [];
+    for (const q of frontier){
+      const x = q % w, y = (q / w) | 0;
+      const nbs = [x > 0 ? q-1 : -1, x < w-1 ? q+1 : -1, y > 0 ? q-w : -1, y < h-1 ? q+w : -1];
+      for (const nb of nbs){
+        if (nb < 0 || removed[nb] || ring[nb]) continue;
+        ring[nb] = dist;
+        unmix(nb);
+        next.push(nb);
+      }
+    }
+    frontier = next;
+  }
+  return removed;
+}
+
+function downloadCanvas(cv, name){
+  return new Promise(res => cv.toBlob(b => { triggerDownload(URL.createObjectURL(b), name); res(); }, "image/png"));
+}
+function triggerDownload(href, name){
+  const a = document.createElement("a");
+  a.href = href; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 8000);
+}
+function fileName(suffix){
+  const t = new Date(), z = n => String(n).padStart(2, "0");
+  return "asset_" + t.getFullYear() + z(t.getMonth()+1) + z(t.getDate()) + "_" +
+         z(t.getHours()) + z(t.getMinutes()) + z(t.getSeconds()) + suffix + ".png";
+}
+/* ---------------- 修补台：缩放/平移/点选/笔刷/裁剪/撤销 ---------------- */
+const ED = { z: 1, px: 0, py: 0, tool: "pan", brush: 16, sel: null, drag: null, undo: [] };
+const edvp = $("edViewport");
+
+let edSource = null;       // 当前编辑图的原图 dataURL（工作台内抠图以它为输入）
+let edSourceUrl = null;    // 若图来自图库, 记录其 /outputs/ 路径（用于「移入项目」）
+
+function edMsg(t){ $("edStatus").textContent = t || ""; }
+function syncTabs(v){
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.view === v));
+}
+function openView(v){
+  syncTabs(v);
+  $("viewGen").style.display = v === "gen" ? "" : "none";
+  $("viewSettings").style.display = v === "settings" ? "" : "none";
+  $("editor").classList.toggle("open", v === "edit");
+  if (v === "edit"){
+    loadGallery();
+    refreshEngine();
+    if (procCanvas && !procCanvas.parentNode) edvp.insertBefore(procCanvas, $("edMarquee"));
+    if (procCanvas) requestAnimationFrame(() => { edFit(); edSyncDims(); });
+    else edMsg("从下方图库选一张图开始，或「📂 导入本地图片」");
+  }
+}
+function edRefreshData(){ procData = procCtx.getImageData(0, 0, procCanvas.width, procCanvas.height); }
+function edApplyView(){
+  procCanvas.style.transform = "translate(" + ED.px + "px," + ED.py + "px) scale(" + ED.z + ")";
+  $("edZoomLabel").textContent = Math.round(ED.z * 100) + "%";
+  edShowMarquee();
+}
+function edFit(){
+  const r = edvp.getBoundingClientRect();
+  ED.z = (Math.min(r.width / procCanvas.width, r.height / procCanvas.height) * 0.95) || 1;
+  ED.px = (r.width - procCanvas.width * ED.z) / 2;
+  ED.py = (r.height - procCanvas.height * ED.z) / 2;
+  edApplyView();
+}
+function edZoomAt(f, cx, cy){
+  const nz = Math.min(20, Math.max(0.05, ED.z * f));
+  ED.px = cx - (cx - ED.px) * nz / ED.z;
+  ED.py = cy - (cy - ED.py) * nz / ED.z;
+  ED.z = nz;
+  edApplyView();
+}
+function edXY(e){
+  const r = edvp.getBoundingClientRect();
+  return [(e.clientX - r.left - ED.px) / ED.z, (e.clientY - r.top - ED.py) / ED.z];
+}
+function edSetTool(t){
+  ED.tool = t;
+  document.querySelectorAll(".edtool").forEach(b => b.classList.toggle("active", b.dataset.tool === t));
+  edvp.style.cursor = t === "pan" ? "grab" : "crosshair";
+}
+document.querySelectorAll(".edtool").forEach(b => b.addEventListener("click", () => edSetTool(b.dataset.tool)));
+
+function edPushUndo(){
+  if (ED.undo.length >= 6) ED.undo.shift();
+  const w = procCanvas.width, h = procCanvas.height;
+  ED.undo.push({
+    w, h,
+    proc: new Uint8ClampedArray(procCtx.getImageData(0, 0, w, h).data),
+    orig: new Uint8ClampedArray(origCanvas.getContext("2d").getImageData(0, 0, w, h).data)
+  });
+}
+function edUndoFn(){
+  const s = ED.undo.pop();
+  if (!s) return setStatus("info", "没有可撤销的操作了（最多保留最近 6 步）");
+  procCanvas.width = s.w; procCanvas.height = s.h;
+  procCtx.putImageData(new ImageData(new Uint8ClampedArray(s.proc), s.w, s.h), 0, 0);
+  origCanvas.width = s.w; origCanvas.height = s.h;
+  const octx = origCanvas.getContext("2d");
+  octx.putImageData(new ImageData(new Uint8ClampedArray(s.orig), s.w, s.h), 0, 0);
+  origFix = octx.getImageData(0, 0, s.w, s.h);
+  edRefreshData();
+  edApplyView();
+  edSyncDims();
+}
+
+function edBrushStamp(x, y, restore){
+  procCtx.save();
+  procCtx.beginPath();
+  procCtx.arc(x, y, ED.brush / 2, 0, Math.PI * 2);
+  if (restore){ procCtx.clip(); procCtx.drawImage(origCanvas, 0, 0); }
+  else { procCtx.globalCompositeOperation = "destination-out"; procCtx.fillStyle = "#000"; procCtx.fill(); }
+  procCtx.restore();
+}
+function edBrushLine(x0, y0, x1, y1, restore){
+  const d = Math.hypot(x1 - x0, y1 - y0), step = Math.max(1, ED.brush / 4);
+  for (let t = 0; t <= d; t += step)
+    edBrushStamp(x0 + (x1 - x0) * t / (d || 1), y0 + (y1 - y0) * t / (d || 1), restore);
+}
+
+function edShowMarquee(){
+  const m = $("edMarquee"), s = ED.sel;
+  if (!s){ m.style.display = "none"; $("edApplyCrop").style.display = "none"; return; }
+  const x = Math.min(s.x0, s.x1), y = Math.min(s.y0, s.y1);
+  const w2 = Math.abs(s.x1 - s.x0), h2 = Math.abs(s.y1 - s.y0);
+  m.style.display = "block";
+  m.style.left = (ED.px + x * ED.z) + "px";
+  m.style.top = (ED.py + y * ED.z) + "px";
+  m.style.width = (w2 * ED.z) + "px";
+  m.style.height = (h2 * ED.z) + "px";
+  $("edApplyCrop").style.display = (w2 > 3 && h2 > 3) ? "" : "none";
+}
+
+function alphaBBox(d, w, h, thr){
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++){
+    for (let x = 0; x < w; x++){
+      if (d[(y * w + x) * 4 + 3] > thr){
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+  }
+  return x1 < 0 ? null : [x0, y0, x1 - x0 + 1, y1 - y0 + 1];
+}
+function edCropTo(x, y, w2, h2){
+  edPushUndo();
+  const cut = cv => {
+    const t = document.createElement("canvas");
+    t.width = w2; t.height = h2;
+    t.getContext("2d").drawImage(cv, x, y, w2, h2, 0, 0, w2, h2);
+    cv.width = w2; cv.height = h2;
+    cv.getContext("2d").drawImage(t, 0, 0);
+  };
+  cut(procCanvas);
+  cut(origCanvas);
+  origFix = origCanvas.getContext("2d").getImageData(0, 0, w2, h2);
+  edRefreshData();
+  ED.sel = null;
+  edFit();
+  edSyncDims();
+}
+$("edApplyCrop").addEventListener("click", () => {
+  const s = ED.sel;
+  if (!s) return;
+  let x = Math.max(0, Math.round(Math.min(s.x0, s.x1)));
+  let y = Math.max(0, Math.round(Math.min(s.y0, s.y1)));
+  let w2 = Math.min(Math.round(Math.abs(s.x1 - s.x0)), procCanvas.width - x);
+  let h2 = Math.min(Math.round(Math.abs(s.y1 - s.y0)), procCanvas.height - y);
+  if (w2 < 4 || h2 < 4) return setStatus("info", "选区太小");
+  edCropTo(x, y, w2, h2);
+  setStatus("ok", "已裁剪为 " + w2 + "×" + h2);
+});
+$("edTrim").addEventListener("click", () => {
+  edRefreshData();
+  const b = alphaBBox(procData.data, procCanvas.width, procCanvas.height, 8);
+  if (!b) return setStatus("info", "图里没有不透明内容");
+  const pad = 4;
+  const x = Math.max(0, b[0] - pad), y = Math.max(0, b[1] - pad);
+  const x2 = Math.min(procCanvas.width, b[0] + b[2] + pad);
+  const y2 = Math.min(procCanvas.height, b[1] + b[3] + pad);
+  edCropTo(x, y, x2 - x, y2 - y);
+  setStatus("ok", "已裁掉透明边，当前 " + (x2 - x) + "×" + (y2 - y));
+});
+
+edvp.addEventListener("contextmenu", e => e.preventDefault());
+edvp.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = edvp.getBoundingClientRect();
+  edZoomAt(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX - r.left, e.clientY - r.top);
+}, { passive: false });
+
+edvp.addEventListener("pointerdown", e => {
+  if (!procCanvas) return;
+  const [x, y] = edXY(e);
+  if (ED.tool === "pan" || e.button === 1){
+    ED.drag = { mode: "pan", sx: e.clientX, sy: e.clientY, px: ED.px, py: ED.py };
+    edvp.style.cursor = "grabbing";
+  } else if (e.button !== 0){
+    return;
+  } else if (ED.tool === "restore" || ED.tool === "erase"){
+    if (x < 0 || y < 0 || x >= procCanvas.width || y >= procCanvas.height) return;
+    edPushUndo();
+    edRefreshData();
+    const n = applyFix(origFix, procData, procCanvas.width, procCanvas.height,
+                       Math.floor(x), Math.floor(y), +$("edTol").value, ED.tool);
+    if (n) procCtx.putImageData(procData, 0, 0);
+    else ED.undo.pop();
+    setStatus(n ? "ok" : "info", n
+      ? (ED.tool === "restore" ? "已恢复 " : "已擦除 ") + n + " 像素（↩ 可撤销）"
+      : (ED.tool === "restore" ? "点击处不是透明区域" : "点击处已是透明"));
+  } else if (ED.tool === "brushR" || ED.tool === "brushE"){
+    edPushUndo();
+    ED.drag = { mode: "brush", lx: x, ly: y, restore: ED.tool === "brushR" };
+    edBrushStamp(x, y, ED.drag.restore);
+  } else if (ED.tool === "crop"){
+    ED.drag = { mode: "crop" };
+    ED.sel = { x0: x, y0: y, x1: x, y1: y };
+    edShowMarquee();
+  }
+  if (ED.drag) edvp.setPointerCapture(e.pointerId);
+});
+edvp.addEventListener("pointermove", e => {
+  if (!ED.drag) return;
+  const [x, y] = edXY(e);
+  if (ED.drag.mode === "pan"){
+    ED.px = ED.drag.px + e.clientX - ED.drag.sx;
+    ED.py = ED.drag.py + e.clientY - ED.drag.sy;
+    edApplyView();
+  } else if (ED.drag.mode === "brush"){
+    edBrushLine(ED.drag.lx, ED.drag.ly, x, y, ED.drag.restore);
+    ED.drag.lx = x; ED.drag.ly = y;
+  } else if (ED.drag.mode === "crop"){
+    ED.sel.x1 = x; ED.sel.y1 = y;
+    edShowMarquee();
+  }
+});
+edvp.addEventListener("pointerup", () => {
+  if (ED.drag && ED.drag.mode === "brush") edRefreshData();
+  ED.drag = null;
+  if (ED.tool === "pan") edvp.style.cursor = "grab";
+});
+
+$("edZoomIn").addEventListener("click", () => { const r = edvp.getBoundingClientRect(); edZoomAt(1.25, r.width / 2, r.height / 2); });
+$("edZoomOut").addEventListener("click", () => { const r = edvp.getBoundingClientRect(); edZoomAt(1 / 1.25, r.width / 2, r.height / 2); });
+$("edFitBtn").addEventListener("click", edFit);
+$("edUndo").addEventListener("click", edUndoFn);
+$("edDownload").addEventListener("click", () => downloadCanvas(procCanvas, fileName("_transparent")));
+
+/* ---- 模块入口与页签 ---- */
+document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => openView(b.dataset.view)));
+$("btnToEditor").addEventListener("click", async () => {
+  if (!currentOriginal) return;
+  await edLoadFromDataUrl(currentOriginal);
+  edSourceUrl = currentOriginalUrl;
+  openView("edit");
+});
+
+/* ---- 图库（磁盘历史 + 本地导入） ---- */
+async function edLoadFromDataUrl(durl){
+  const im = await loadImage(durl);
+  const ocv = document.createElement("canvas");
+  ocv.width = im.naturalWidth; ocv.height = im.naturalHeight;
+  ocv.getContext("2d", { willReadFrequently: true }).drawImage(im, 0, 0);
+  const pcv = document.createElement("canvas");
+  pcv.width = ocv.width; pcv.height = ocv.height;
+  pcv.getContext("2d", { willReadFrequently: true }).drawImage(im, 0, 0);
+  if (procCanvas && procCanvas.parentNode) procCanvas.parentNode.removeChild(procCanvas);
+  origCanvas = ocv;
+  origFix = ocv.getContext("2d").getImageData(0, 0, ocv.width, ocv.height);
+  procCanvas = pcv;
+  procCtx = pcv.getContext("2d", { willReadFrequently: true });
+  procData = procCtx.getImageData(0, 0, pcv.width, pcv.height);
+  edSource = durl;
+  ED.undo = []; ED.sel = null;
+  edvp.insertBefore(procCanvas, $("edMarquee"));
+  edShowMarquee();
+  edSyncDims();
+  if ($("editor").classList.contains("open")) edFit();
+  edMsg("已载入 " + pcv.width + "×" + pcv.height + "，可「✨ AI 抠图」或直接修补/裁剪/导出");
+}
+async function loadGallery(){
+  try {
+    const proj = encodeURIComponent($("edProjSel").value);
+    const d = await (await fetch("/api/history?project=" + proj)).json();
+    const box = $("edThumbs");
+    box.innerHTML = "";
+    for (const u of (d.items || [])){
+      const im = document.createElement("img");
+      im.src = u;
+      im.title = decodeURIComponent(u).split("/").slice(2).join(" / ") + "（点击载入）";
+      im.addEventListener("click", async () => {
+        await edLoadFromDataUrl(await toDataUrl(u));
+        edSourceUrl = u;
+      });
+      box.appendChild(im);
+    }
+    if (!(d.items || []).length && !procCanvas) edMsg("该筛选下没有图片：先去「🎨 生图」，或「📂 导入本地图片」");
+  } catch (e) {}
+}
+$("edImport").addEventListener("click", () => $("edFile").click());
+$("edFile").addEventListener("change", e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => { edSourceUrl = null; edLoadFromDataUrl(rd.result); };
+  rd.readAsDataURL(f);
+  e.target.value = "";
+});
+$("edRefreshGal").addEventListener("click", loadGallery);
+$("edProjSel").addEventListener("change", loadGallery);
+$("edAssign").addEventListener("click", async () => {
+  if (!edSourceUrl)
+    return edMsg("只有从图库载入的图才能移动；导入的本地图请用「💾 保存到图库」存入目标项目");
+  const target = $("edProjSel").value;
+  if (target === "_all")
+    return edMsg("请先在「项目」筛选里选中目标项目（或「未分类」），再点移入");
+  try {
+    const r = await fetch("/api/projects/assign", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: edSourceUrl, project: target }) });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    edSourceUrl = d.url;
+    edMsg("已移入「" + (target || "未分类") + "」");
+    loadGallery();
+    loadProjects();
+  } catch (err) {
+    edMsg("移动失败：" + err.message);
+  }
+});
+
+/* ---- 编辑器内 AI 抠图（始终以原图为输入） ---- */
+$("edMatting").addEventListener("click", async () => {
+  if (!edSource || !procCanvas) return edMsg("请先从图库选择或导入一张图");
+  edPushUndo();
+  edMsg("AI 抠图处理中…（首次调用需加载模型）");
+  try {
+    let resUrl;
+    if (mattingAvail){
+      const r = await fetch("/api/matting", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: edSource, enhanced: $("edEnh").checked,
+                               choke: +$("edChoke").value }) });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      resUrl = d.image;
+    } else {
+      const im = await loadImage(edSource);
+      resUrl = removeBackground(im, +$("edTol").value, true).toDataURL("image/png");
+    }
+    // 原图层与结果层都恢复到原始尺寸, 保证笔刷恢复对位
+    const oim = await loadImage(edSource);
+    origCanvas.width = oim.naturalWidth; origCanvas.height = oim.naturalHeight;
+    const octx = origCanvas.getContext("2d");
+    octx.drawImage(oim, 0, 0);
+    origFix = octx.getImageData(0, 0, origCanvas.width, origCanvas.height);
+    const rim = await loadImage(resUrl);
+    procCanvas.width = rim.naturalWidth; procCanvas.height = rim.naturalHeight;
+    procCtx.drawImage(rim, 0, 0);
+    edRefreshData();
+    edFit();
+    edSyncDims();
+    refreshEngine();
+    edMsg("抠图完成。可用修补工具微调，然后导出 / 保存到图库");
+  } catch (err) {
+    ED.undo.pop();
+    edMsg("抠图失败：" + err.message);
+  }
+});
+
+/* ---- 指定分辨率导出 / 保存到图库 ---- */
+function edSyncDims(){
+  if (!procCanvas) return;
+  $("edW").value = procCanvas.width;
+  $("edH").value = procCanvas.height;
+}
+$("edExport").addEventListener("click", () => {
+  if (!procCanvas) return;
+  let W = parseInt($("edW").value, 10) || 0, H = parseInt($("edH").value, 10) || 0;
+  if (W < 1 && H < 1) return edMsg("请填写导出宽或高（只填一个则按比例算另一个）");
+  const sw = procCanvas.width, sh = procCanvas.height;
+  if (W < 1) W = Math.max(1, Math.round(sw * H / sh));
+  if (H < 1) H = Math.max(1, Math.round(sh * W / sw));
+  const cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  if ($("edKeepRatio").checked){
+    const k = Math.min(W / sw, H / sh);
+    const dw = Math.max(1, Math.round(sw * k)), dh = Math.max(1, Math.round(sh * k));
+    ctx.drawImage(procCanvas, Math.round((W - dw) / 2), Math.round((H - dh) / 2), dw, dh);
+  } else {
+    ctx.drawImage(procCanvas, 0, 0, W, H);
+  }
+  downloadCanvas(cv, fileName("_" + W + "x" + H));
+  edMsg("已导出 " + W + "×" + H + " PNG（保持比例时多余部分为透明）");
+});
+$("edSave").addEventListener("click", async () => {
+  if (!procCanvas) return;
+  edMsg("保存中…");
+  try {
+    const r = await fetch("/api/save", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: procCanvas.toDataURL("image/png"),
+                             project: $("edProjSel").value === "_all" ? "" : $("edProjSel").value }) });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    edSourceUrl = d.saved || edSourceUrl;
+    edMsg("已保存到图库：" + decodeURIComponent(d.saved || "").split("/").slice(2).join(" / "));
+    loadGallery();
+    loadProjects();
+  } catch (err) {
+    edMsg("保存失败：" + err.message);
+  }
+});
+$("edTol").addEventListener("input", () => $("edTolVal").textContent = $("edTol").value);
+$("edBrush").addEventListener("input", () => { ED.brush = +$("edBrush").value; $("edBrushVal").textContent = ED.brush; });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && $("editor").classList.contains("open")) openView("gen");
+  if (e.key.toLowerCase() === "z" && (e.ctrlKey || e.metaKey) && $("editor").classList.contains("open")){
+    e.preventDefault();
+    edUndoFn();
+  }
+});
+edSetTool("pan");
+
+/* ---- 主题切换 (Dark / Light Theme) ---- */
+function applyTheme(theme){
+  document.documentElement.setAttribute("data-theme", theme);
+  localStorage.setItem("s2a_theme", theme);
+  const btn = $("themeToggle");
+  if(btn){
+    btn.innerHTML = theme === "light" ? '<i data-lucide="moon"></i>' : '<i data-lucide="sun"></i>';
+    if(window.lucide) lucide.createIcons();
+  }
+}
+$("themeToggle")?.addEventListener("click", () => {
+  const curTheme = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+  applyTheme(curTheme);
+});
+const savedTheme = localStorage.getItem("s2a_theme") || "dark";
+applyTheme(savedTheme);
+
+/* ---- 全局双语言国际化 i18n 引擎 (ZH / EN) ---- */
+const I18N = {
+  zh: {
+    tabGen: "生图", tabEdit: "工作台", tabSettings: "设置",
+    sketchBase: "草图引导 (SKETCH BASE)", dropText: "点击选择图片或拖拽草图到此处", dropSub: "支持 PNG / JPG / WebP，自动轻量压缩", btnRemove: "移除",
+    promptTitle: "提示词 (PROMPT COMMAND)", promptPh: "例如：一把奇幻风格的火焰长剑，游戏道具图标，金色剑柄，华丽装饰... (Ctrl+Enter 快速生成)",
+    btnGenText: "生成资产图", placeholder: "生成资产图将在此展示", btnToEditor: "送入工作台", btnOrig: "下载原图",
+    apiSettings: "API 设置 (PROFILES)", profScheme: "配置方案", profNameLabel: "方案名称", btnDelete: "删除", apiType: "接口类型", optImages: "图像接口 /images", optChat: "对话接口 /chat", modelName: "模型名称", btnFetch: "拉取",
+    projLabel: "项目归档", optUncat: "未分类", optAll: "全部", projStyleLabel: "项目风格描述",
+    styleLabel: "美术风格", styleDefault: "默认（跟随提示词）", stylePixel: "像素风 Pixel Art", styleCartoon: "美式卡通 Cartoon", styleAnime: "二次元 Anime", styleLowpoly: "低多边形 Low Poly", styleRealistic: "写实 Realistic", styleWatercolor: "水彩手绘 Watercolor", styleCyberpunk: "赛博朋克 Cyberpunk", styleRender3d: "3D 渲染 3D Render",
+    sizeLabel: "分辨率", sizeAuto: "自动", size1536x1024: "1536 × 1024 横", size1024x1536: "1024 × 1536 竖", sizeCustom: "自定义…", sizeWLabel: "自定义宽", sizeHLabel: "自定义高",
+    bgLabel: "生成背景", bgWhite: "纯白（默认推荐）", bgGray: "中性灰", bgBlack: "纯黑", bgNone: "不指定", historyLabel: "历史图库",
+    // 设置页
+    cfgTitle: "导入 / 导出配置", cfgHint: "导出内容：API 配置方案与项目清单及其风格设定。<br>导入规则：只新增、绝不覆盖现有配置。", cfgExportText: "导出配置 JSON", cfgImportText: "导入配置 JSON",
+    // 工作台
+    edFit: "适配", edUndo: "撤销", edTrim: "裁透明边", edApplyCrop: "应用裁剪", autoPh: "自动",
+    inspectorTitle: "INSPECTOR 属性控制", mattingCardTitle: "AI 智能抠图引擎", edMattingText: "开始 AI 抠图",
+    modelLabel: "抠图模型", devLabel: "计算设备", devAuto: "自动", chokeLabel: "收边像素", enhLabel: "增强模式",
+    tolLabel: "色彩容差", brushLabel: "笔刷大小", exportCardTitle: "分辨率无损导出", widthLabel: "宽 (W)", heightLabel: "高 (H)", keepRatioLabel: "保持纵横比居中填充",
+    edExportText: "按分辨率导出 PNG", edSaveText: "存进图库", edDownloadText: "下载 PNG", edAssignText: "移入项目", edImportText: "导入本地图片",
+    initialEdStatus: "从下方图库单击一张图开始，或「导入本地图片」",
+    toolPan: "移动画布 (Space/中键拖拽)", toolRestore: "按颜色点选恢复", toolErase: "按颜色点选擦除",
+    toolBrushR: "笔刷自由涂抹恢复", toolBrushE: "笔刷自由涂抹擦除", toolCrop: "框选裁剪区域"
+  },
+  en: {
+    tabGen: "Generate", tabEdit: "Studio", tabSettings: "Settings",
+    sketchBase: "SKETCH BASE", dropText: "Click to select or drag sketch here", dropSub: "Supports PNG / JPG / WebP (auto compressed)", btnRemove: "Remove",
+    promptTitle: "PROMPT COMMAND", promptPh: "e.g. A fantasy flame sword, game item icon, golden hilt... (Ctrl+Enter)",
+    btnGenText: "Generate Asset", placeholder: "Generated asset will appear here", btnToEditor: "Send to Studio", btnOrig: "Download Raw",
+    apiSettings: "API PROFILES", profScheme: "Profiles", profNameLabel: "Profile Name", btnDelete: "Delete", apiType: "API Type", optImages: "Images Endpoint", optChat: "Chat Endpoint", modelName: "Model Name", btnFetch: "Fetch",
+    projLabel: "Project Hub", optUncat: "Uncategorized", optAll: "All Projects", projStyleLabel: "Project Style Prompt",
+    styleLabel: "Art Style", styleDefault: "Default (Follow Prompt)", stylePixel: "Pixel Art", styleCartoon: "Cartoon", styleAnime: "Anime", styleLowpoly: "Low Poly", styleRealistic: "Realistic", styleWatercolor: "Watercolor", styleCyberpunk: "Cyberpunk", styleRender3d: "3D Render",
+    sizeLabel: "Resolution", sizeAuto: "Auto", size1536x1024: "1536 × 1024 Land", size1024x1536: "1024 × 1536 Port", sizeCustom: "Custom…", sizeWLabel: "Custom Width", sizeHLabel: "Custom Height",
+    bgLabel: "Background", bgWhite: "Pure White (Recommended)", bgGray: "Studio Gray", bgBlack: "Pure Black", bgNone: "Unspecified", historyLabel: "History Wall",
+    // Settings
+    cfgTitle: "Import / Export Config", cfgHint: "Exports API profiles and projects with style prompts.<br>Import rule: Appends new entries only, never overwrites.", cfgExportText: "Export Config JSON", cfgImportText: "Import Config JSON",
+    // Studio
+    edFit: "Fit View", edUndo: "Undo", edTrim: "Trim Transparent", edApplyCrop: "Apply Crop", autoPh: "Auto",
+    inspectorTitle: "INSPECTOR CONTROLS", mattingCardTitle: "AI MATTING ENGINE", edMattingText: "Run AI Matting",
+    modelLabel: "Matting Model", devLabel: "Compute Device", devAuto: "Auto", chokeLabel: "Choke Border", enhLabel: "Enhance Mode",
+    tolLabel: "Color Tolerance", brushLabel: "Brush Size", exportCardTitle: "LOSSLESS EXPORT", widthLabel: "Width (W)", heightLabel: "Height (H)", keepRatioLabel: "Maintain Aspect Ratio",
+    edExportText: "Export Custom PNG", edSaveText: "Save to Gallery", edDownloadText: "Download PNG", edAssignText: "Move to Project", edImportText: "Import Local Image",
+    initialEdStatus: "Click an image below or 'Import Local Image'",
+    toolPan: "Move Canvas (Space/Middle Drag)", toolRestore: "Color Pick Restore", toolErase: "Color Pick Erase",
+    toolBrushR: "Brush Restore", toolBrushE: "Brush Erase", toolCrop: "Crop Region"
+  }
+};
+
+let currentLang = localStorage.getItem("s2a_lang") || "zh";
+
+function applyLanguage(lang) {
+  currentLang = lang;
+  localStorage.setItem("s2a_lang", lang);
+  const dict = I18N[lang] || I18N.zh;
+  
+  const btn = $("langToggle");
+  if (btn) btn.textContent = lang === "zh" ? "EN" : "中";
+
+  // 全量替代 data-i18n 元素
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    const key = el.getAttribute("data-i18n");
+    if (!dict[key]) return;
+
+    const icon = el.querySelector("i[data-lucide]");
+    if (icon) {
+      const iconHTML = icon.outerHTML;
+      el.innerHTML = iconHTML + " " + dict[key];
+    } else {
+      el.textContent = dict[key];
+    }
+  });
+
+  // 全量替代 data-i18n-opt 元素
+  document.querySelectorAll("[data-i18n-opt]").forEach(opt => {
+    const key = opt.getAttribute("data-i18n-opt");
+    if (dict[key]) opt.textContent = dict[key];
+  });
+
+  // 全量替代 data-i18n-ph (placeholder) 元素
+  document.querySelectorAll("[data-i18n-ph]").forEach(input => {
+    const key = input.getAttribute("data-i18n-ph");
+    if (dict[key]) input.placeholder = dict[key];
+  });
+
+  // 全量替代 data-i18n-title (tooltip) 元素
+  document.querySelectorAll("[data-i18n-title]").forEach(el => {
+    const key = el.getAttribute("data-i18n-title");
+    if (dict[key]) el.title = dict[key];
+  });
+
+  if ($("edStatus") && (!$("edStatus").textContent || $("edStatus").textContent.includes("从下方图库") || $("edStatus").textContent.includes("Click an image"))) {
+    $("edStatus").textContent = dict.initialEdStatus;
+  }
+
+  if (typeof refreshEngine === "function") refreshEngine();
+  if (typeof loadProjects === "function") loadProjects();
+  if (window.lucide) lucide.createIcons();
+}
+
+$("langToggle")?.addEventListener("click", () => {
+  applyLanguage(currentLang === "zh" ? "en" : "zh");
+});
+applyLanguage(currentLang);
+
+if (window.lucide) { lucide.createIcons(); }
+</script>
+</body>
+</html>

@@ -29,6 +29,7 @@
 - **OpenAI Compatible**: Seamlessly supports OpenAI Images API (`/v1/images/edits`) and Chat Completions API (`/v1/chat/completions`).
 
 ### 🛠 2. Pro Studio AI Matting & Editing
+- **Batch Drag-and-Drop & Multi-Import**: Drop single or multiple external images directly onto the Studio viewport, or select multiple files to batch import into project galleries.
 - **SOTA Deep Learning Matting**: Integrated with BiRefNet, BEN2, and ISNet models with GPU hardware acceleration (DirectML/CUDA).
 - **Edge Protection & Anti-Fringing**:
   - **Foreground Unmixing**: Recalculates semi-transparent boundary pixels to remove white background bleeding.
@@ -36,12 +37,19 @@
   - **4px Color Bleed**: Expands edge pixels outward by 4px to prevent bilinear filtering bleed in game engines like Unity/Unreal.
 - **Pixel-Level Retouching**: Interactive color-picker restore/erase, custom brush tools, auto-trimming, and resolution-customized PNG export.
 
-### 🌐 3. Avant-Garde UI & Full i18n
+### 🎮 3. AI Pixel Art Quantizer & Cleaner
+- **Eliminate Fake Pixels & Color Jitter**: Strips diffusion gradients, interpolation noise, and anti-aliasing artifacts to ensure **100% solid, flat colors** per pixel block.
+- **Auto Grid Detection & Custom Resolving**: Intelligent grid period detection (Auto), or lock to 32×32, 64×64, 128×128, 256×256, or fixed pixel block cells.
+- **Palette Quantization & Retro Palettes**: Features 16/32/64 color K-Means quantization, along with classic **PICO-8** and **Game Boy** color palettes.
+- **Hard Alpha & Native Res Export**: Hardens fuzzy semi-transparent edges and allows one-click export at native low resolution (e.g., 64×64) without blur.
+- **Generation Pipeline Integration**: Automatically cleans generated pixel art images and provides quick-action clean buttons.
+
+### 🌐 4. Avant-Garde UI & Full i18n
 - **Awwwards-Level 3-Column Inspector**: Professional engine-inspired layout powered by Lucide vector icons (Zero Emojis).
 - **Dual Theme System**: Toggle between sleek Dark Mode and clean Light Mode with instant `localStorage` persistence.
 - **100% i18n Multi-Language**: Smooth real-time switching between English and Chinese across all text nodes, options, and dynamic statuses.
 
-### 📁 4. Project Archiving & Style Locking
+### 📁 5. Project Archiving & Style Locking
 - **Project Isolation**: Automatically archives assets into dedicated `outputs/project_name/` folders.
 - **Style Consistency Locking**: Lock prompt suffixes and style presets per project (`project.json`) for cohesive asset batches.
 - **Config JSON Export/Import**: Easily backup and transfer API profiles and project style settings (append-only mode).

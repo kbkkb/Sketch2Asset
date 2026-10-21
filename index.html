@@ -66,8 +66,26 @@
     display:grid; grid-template-columns:350px 1fr 340px; gap:16px; align-content:stretch;
     padding:16px 20px; max-width:1720px; margin:0 auto;
   }
-  @media (max-width:1200px){ main#viewGen{grid-template-columns:340px 1fr} .right-inspector{display:none} }
-  @media (max-width:840px){ main#viewGen{grid-template-columns:1fr} }
+  /* 窄屏: 右栏 Inspector 是唯一能填 Base URL / API Key 的地方, 绝不能 display:none,
+     否则应用在窄屏下彻底无法配置。这里改成通栏平铺到下一行。 */
+  @media (max-width:1200px){
+    main#viewGen{grid-template-columns:340px 1fr}
+    .right-inspector{grid-column:1 / -1}
+    .checker{min-height:340px}
+  }
+  @media (max-width:840px){
+    main#viewGen{grid-template-columns:1fr; padding:12px 14px}
+    .right-inspector{grid-column:auto}
+    .checker{min-height:240px}
+    .checker img{max-height:60vh}
+    .row{flex-wrap:wrap}
+  }
+  /* 工作台同理: 窄屏把右侧 Inspector 压到视口下方而不是挤成一条。
+     显式给出行高, 否则隐式行会把 #edViewport 压扁到内容高度(canvas 是绝对定位, 高度为 0)。 */
+  @media (max-width:840px){
+    #editor{grid-template-columns:60px 1fr; grid-template-rows:minmax(240px, 1fr) auto auto; overflow-y:auto}
+    #edSidebar{grid-column:1 / -1; border-left:none; border-top:1px solid var(--line); overflow:visible}
+  }
   
   .panel{
     background:var(--panel); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
@@ -259,6 +277,58 @@
     box-shadow:0 4px 16px rgba(16, 185, 129, 0.35); transition:all .18s ease;
   }
   a.dl-primary:hover{transform:translateY(-1px); box-shadow:0 6px 22px rgba(16, 185, 129, 0.5)}
+
+  /* 先锋模型下拉 Combobox 选择器 */
+  .combobox-wrap{position:relative; width:100%}
+  .combobox-input-box{position:relative; display:flex; align-items:center; width:100%}
+  .combobox-input-box input{padding-right:34px; cursor:text}
+  .combobox-toggle{
+    position:absolute; right:6px; top:50%; transform:translateY(-50%);
+    background:transparent; border:none; color:var(--muted); cursor:pointer;
+    padding:4px; display:flex; align-items:center; justify-content:center;
+    border-radius:6px; transition:all .15s;
+  }
+  .combobox-toggle:hover{color:var(--text); background:rgba(255,255,255,0.08)}
+  .model-dropdown{
+    position:absolute; top:calc(100% + 6px); left:0; right:0; z-index:100;
+    background:var(--panel-solid); backdrop-filter:blur(24px); -webkit-backdrop-filter:blur(24px);
+    border:1px solid var(--line); border-radius:12px;
+    box-shadow:0 18px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.06);
+    display:none; flex-direction:column; max-height:280px; overflow:hidden;
+    animation:fadeIn .18s ease;
+  }
+  .model-dropdown.show{display:flex}
+  .model-search-bar{
+    padding:8px; border-bottom:1px solid var(--line); background:rgba(0,0,0,0.15);
+    display:flex; align-items:center; gap:6px;
+  }
+  .model-search-bar input{padding:6px 10px; font-size:12px; border-radius:7px}
+  .model-list-scroll{
+    flex:1; overflow-y:auto; padding:4px; display:flex; flex-direction:column; gap:2px;
+  }
+  .model-group-title{
+    font-size:10px; font-weight:700; color:var(--muted); letter-spacing:0.5px;
+    padding:6px 8px 3px; text-transform:uppercase; display:flex; align-items:center; gap:4px;
+  }
+  .model-item{
+    padding:7px 10px; border-radius:8px; font-size:12px; font-family:'JetBrains Mono',monospace;
+    color:var(--text); cursor:pointer; display:flex; align-items:center; justify-content:space-between;
+    transition:all .15s ease; user-select:none;
+  }
+  .model-item:hover, .model-item.highlight{
+    background:rgba(99, 102, 241, 0.2); color:#fff;
+  }
+  .model-item.selected{
+    background:linear-gradient(135deg, rgba(99,102,241,0.3), rgba(139,92,246,0.3));
+    color:var(--accent); font-weight:700;
+  }
+  .model-badge{
+    font-size:10px; padding:2px 6px; border-radius:4px; font-family:inherit;
+    background:rgba(99,102,241,0.25); color:#a5b4fc; border:1px solid rgba(99,102,241,0.35);
+  }
+  .model-empty{
+    padding:16px; text-align:center; font-size:12px; color:var(--muted); line-height:1.6;
+  }
 </style>
 </head>
 <body>
@@ -273,8 +343,8 @@
     <button class="ghost tab" data-view="edit"><i data-lucide="sliders"></i> <span data-i18n="tabEdit">工作台</span></button>
     <button class="ghost tab" data-view="settings"><i data-lucide="settings"></i> <span data-i18n="tabSettings">设置</span></button>
     <div style="width:1px;height:18px;background:var(--line);margin:0 4px"></div>
-    <button class="ghost" id="themeToggle" title="切换深色 / 浅色模式" style="padding:7px 10px"><i data-lucide="sun"></i></button>
-    <button class="ghost" id="langToggle" title="Switch Language / 切换语言" style="padding:6px 10px;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700">EN</button>
+    <button class="ghost" id="themeToggle" data-i18n-title="titleTheme" title="切换深色 / 浅色模式" style="padding:7px 10px"><i data-lucide="sun"></i></button>
+    <button class="ghost" id="langToggle" data-i18n-title="titleLang" title="Switch Language / 切换语言" style="padding:6px 10px;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700">EN</button>
   </nav>
 </header>
 
@@ -290,7 +360,7 @@
           <span class="hint" data-i18n="dropSub">支持 PNG / JPG / WebP，自动轻量压缩</span>
         </div>
         <img id="sketchPreview" style="display:none" alt="草图预览">
-        <button class="rm" id="btnRemoveSketch" style="display:none" title="移除草图"><i data-lucide="x"></i> <span data-i18n="btnRemove">移除</span></button>
+        <button class="rm" id="btnRemoveSketch" style="display:none" data-i18n-title="titleRemoveSketch" title="移除草图"><i data-lucide="x"></i> <span data-i18n="btnRemove">移除</span></button>
       </div>
       <input type="file" id="fileInput" accept="image/*" hidden>
     </div>
@@ -315,7 +385,8 @@
       <img id="resultImg" style="display:none" alt="生成结果">
     </div>
     <div class="actions">
-      <button class="dl-primary" id="btnToEditor" disabled title="把当前图带进工作台进行 AI 抠图、精细修补、裁剪与导出"><i data-lucide="sliders"></i> <span data-i18n="btnToEditor">送入工作台</span></button>
+      <button class="dl-primary" id="btnToEditor" disabled data-i18n-title="titleToEditor" title="把当前图带进工作台进行 AI 抠图、精细修补、裁剪与导出"><i data-lucide="sliders"></i> <span data-i18n="btnToEditor">送入工作台</span></button>
+      <button class="ghost" id="btnQuickPixelClean" style="display:none" data-i18n-title="titleQuickPixelClean" title="将当前图像纯化为规整单色色块真像素图"><i data-lucide="gamepad-2"></i> <span data-i18n="btnQuickPixelCleanText">像素纯化</span></button>
       <button class="ghost" id="btnOrig" disabled><i data-lucide="download"></i> <span data-i18n="btnOrig">下载原图</span></button>
     </div>
   </section>
@@ -332,10 +403,10 @@
         <div class="row">
           <div class="field">
             <label class="t" data-i18n="profNameLabel">方案名称</label>
-            <input type="text" id="profName" autocomplete="off" spellcheck="false" placeholder="例如：A站·gpt-image / B站·nano-banana">
+            <input type="text" id="profName" autocomplete="off" spellcheck="false" data-i18n-ph="profNamePh" placeholder="例如：A站·gpt-image / B站·nano-banana">
           </div>
           <div class="field" style="flex:0 0 auto;display:flex;align-items:flex-end">
-            <button class="ghost" id="profDel" title="删除当前方案"><i data-lucide="trash-2"></i> <span data-i18n="btnDelete">删除</span></button>
+            <button class="ghost" id="profDel" data-i18n-title="titleProfDel" title="删除当前方案"><i data-lucide="trash-2"></i> <span data-i18n="btnDelete">删除</span></button>
           </div>
         </div>
         <div class="field">
@@ -346,21 +417,31 @@
           <label class="t">API Key</label>
           <input type="text" id="apiKey" class="secret" autocomplete="off" spellcheck="false" placeholder="sk-...">
         </div>
-        <div class="row">
-          <div class="field">
-            <label class="t" data-i18n="apiType">接口类型</label>
-            <select id="apiMode">
-              <option value="images" data-i18n-opt="optImages">图像接口 /images</option>
-              <option value="chat" data-i18n-opt="optChat">对话接口 /chat</option>
-            </select>
+        <div class="field">
+          <label class="t" data-i18n="apiType"><i data-lucide="network"></i> 接口类型</label>
+          <select id="apiMode">
+            <option value="images" data-i18n-opt="optImages">图像接口 /images (推荐出图专用)</option>
+            <option value="chat" data-i18n-opt="optChat">对话接口 /chat (兼容 Gemini / Nano 等多模态)</option>
+          </select>
+        </div>
+
+        <div class="field" style="position:relative">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <label class="t" style="margin:0" data-i18n="modelName"><i data-lucide="cpu"></i> 模型选择 (MODEL)</label>
+            <button class="ghost" id="btnFetchModels" style="padding:2px 8px;font-size:11px;height:24px" data-i18n-title="titleFetchModels" title="从当前 API 地址在线拉取所有可用模型"><i data-lucide="refresh-cw" style="width:12px;height:12px"></i> <span data-i18n="btnFetch">拉取模型</span></button>
           </div>
-          <div class="field">
-            <label class="t" data-i18n="modelName">模型名称</label>
-            <div style="display:flex;gap:6px">
-              <input type="text" id="apiModel" list="modelList" autocomplete="off" spellcheck="false" placeholder="gpt-image-1" style="flex:1;min-width:0">
-              <button class="ghost" id="btnFetchModels" style="white-space:nowrap;padding:6px 10px"><i data-lucide="refresh-cw"></i> <span data-i18n="btnFetch">拉取</span></button>
+          <div class="combobox-wrap" id="modelCombobox">
+            <div class="combobox-input-box">
+              <input type="text" id="apiModel" autocomplete="off" spellcheck="false" placeholder="gpt-image-1">
+              <button class="combobox-toggle" id="btnToggleModelMenu" type="button" data-i18n-title="titleToggleModelMenu" title="展开/收起模型选择列表"><i data-lucide="chevron-down" style="width:14px;height:14px"></i></button>
             </div>
-            <datalist id="modelList"></datalist>
+            <div class="model-dropdown" id="modelDropdownMenu">
+              <div class="model-search-bar">
+                <i data-lucide="search" style="width:13px;height:13px;color:var(--muted)"></i>
+                <input type="text" id="modelSearchInput" data-i18n-ph="modelSearchPh" placeholder="输入关键字搜索模型..." autocomplete="off">
+              </div>
+              <div class="model-list-scroll" id="modelListItems"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -372,8 +453,8 @@
         <select id="projSel"><option value="" data-i18n-opt="optUncat">未分类</option></select>
       </div>
       <div class="field" style="flex:0 0 auto;display:flex;align-items:flex-end;gap:4px">
-        <button class="ghost" id="projNew" title="新建项目"><i data-lucide="folder-plus"></i></button>
-        <button class="ghost" id="projRen" title="重命名项目"><i data-lucide="file-signature"></i></button>
+        <button class="ghost" id="projNew" data-i18n-title="titleProjNew" title="新建项目"><i data-lucide="folder-plus"></i></button>
+        <button class="ghost" id="projRen" data-i18n-title="titleProjRen" title="重命名项目"><i data-lucide="file-signature"></i></button>
       </div>
     </div>
     <div class="field" id="projStyleBox" style="display:none">
@@ -471,6 +552,10 @@
   <!-- 中央 视口画布 Viewport -->
   <div id="edViewport" class="checker">
     <div id="edMarquee"></div>
+    <div id="edDropOverlay" style="display:none;position:absolute;inset:0;background:rgba(99,102,241,0.22);border:2.5px dashed var(--accent);backdrop-filter:blur(4px);z-index:20;align-items:center;justify-content:center;flex-direction:column;pointer-events:none;color:#fff;font-weight:700;gap:10px">
+      <i data-lucide="upload-cloud" style="width:40px;height:40px;color:#fff"></i>
+      <span data-i18n="edDropOverlayText" style="font-size:15px;letter-spacing:0.5px;text-shadow:0 2px 10px rgba(0,0,0,0.6)">拖放图片到此，立即载入 / 批量导入</span>
+    </div>
     <div style="position:absolute;top:14px;left:14px;z-index:5;display:flex;gap:6px;align-items:center;background:var(--panel);padding:4px 10px;border-radius:10px;border:1px solid var(--line);backdrop-filter:blur(8px);box-shadow:0 4px 16px rgba(0,0,0,0.1)">
       <button class="ghost" id="edZoomOut" style="padding:2px 8px"><i data-lucide="minus"></i></button>
       <span class="tolbox" id="edZoomLabel" style="font-family:'JetBrains Mono',monospace">100%</span>
@@ -478,7 +563,7 @@
       <button class="ghost" id="edFitBtn" style="padding:2px 8px"><i data-lucide="maximize-2"></i> <span data-i18n="edFit">适配</span></button>
       <div class="sep" style="height:14px"></div>
       <button class="ghost" id="edUndo" title="Ctrl+Z" style="padding:2px 8px"><i data-lucide="undo-2"></i> <span data-i18n="edUndo">撤销</span></button>
-      <button class="ghost" id="edTrim" title="自动裁掉四周多余透明边" style="padding:2px 8px"><i data-lucide="scissors"></i> <span data-i18n="edTrim">裁透明边</span></button>
+      <button class="ghost" id="edTrim" data-i18n-title="titleEdTrim" title="自动裁掉四周多余透明边" style="padding:2px 8px"><i data-lucide="scissors"></i> <span data-i18n="edTrim">裁透明边</span></button>
       <button class="ghost" id="edApplyCrop" style="display:none;padding:2px 8px;border-color:var(--accent)"><i data-lucide="check"></i> <span data-i18n="edApplyCrop">应用裁剪</span></button>
     </div>
   </div>
@@ -520,12 +605,56 @@
       </div>
 
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <label class="tolbox" style="cursor:pointer" title="针对贴背景边缘与漏检强色块做补回处理">
+        <label class="tolbox" style="cursor:pointer" data-i18n-title="titleEnh" title="针对贴背景边缘与漏检强色块做补回处理">
           <input type="checkbox" id="edEnh" style="accent-color:var(--accent)"> <span data-i18n="enhLabel">增强模式</span>
         </label>
       </div>
       
       <div id="engineInfo" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);line-height:1.4">检测中…</div>
+    </div>
+
+    <!-- 🎮 像素艺术纯化 Inspector 面板 -->
+    <div style="background:var(--panel2);padding:12px;border-radius:10px;border:1px solid var(--line);display:flex;flex-direction:column;gap:10px">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;display:flex;align-items:center;gap:6px" data-i18n="pixelCardTitle">
+        <i data-lucide="gamepad-2" style="width:13px;height:13px;color:var(--accent)"></i> 像素艺术纯化 (Pixel Clean)
+      </div>
+
+      <div class="row">
+        <div class="field" style="margin:0">
+          <label class="t" data-i18n="pixelGridLabel"><i data-lucide="grid" style="width:12px;height:12px"></i> 网格精度</label>
+          <select id="edPixelGrid" style="width:100%;padding:5px 8px">
+            <option value="auto" data-i18n-opt="pixelGridAuto">自动检测</option>
+            <option value="32">32 × 32 (超复古)</option>
+            <option value="64" selected>64 × 64 (标准)</option>
+            <option value="128">128 × 128 (高精)</option>
+            <option value="256">256 × 256 (超精细)</option>
+            <option value="cell8">8px 单元格</option>
+            <option value="cell16">16px 单元格</option>
+          </select>
+        </div>
+        <div class="field" style="margin:0">
+          <label class="t" data-i18n="pixelPaletteLabel"><i data-lucide="palette" style="width:12px;height:12px"></i> 色彩盘限制</label>
+          <select id="edPixelPalette" style="width:100%;padding:5px 8px">
+            <option value="auto" data-i18n-opt="pixelPalAuto">自动保真 (无损)</option>
+            <option value="16" data-i18n-opt="pixelPal16">16 色限制</option>
+            <option value="32" data-i18n-opt="pixelPal32">32 色限制</option>
+            <option value="64" data-i18n-opt="pixelPal64">64 色限制</option>
+            <option value="pico8">PICO-8 (16色)</option>
+            <option value="gameboy">GameBoy (4色)</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <label class="tolbox" style="cursor:pointer" data-i18n-title="titlePixelAlpha" title="将半透明抗锯齿噪点二值化为硬边，确保边缘无白边与模糊">
+          <input type="checkbox" id="edPixelHardAlpha" checked style="accent-color:var(--accent)"> <span data-i18n="pixelHardAlphaLabel">硬边缘透明化</span>
+        </label>
+      </div>
+
+      <div class="row">
+        <button class="ghost" id="btnPixelClean" style="flex:1;justify-content:center"><i data-lucide="sparkles"></i> <span data-i18n="btnPixelCleanText">一键纯化色块</span></button>
+        <button class="ghost" id="btnPixelNativeExport" style="justify-content:center" data-i18n-title="titlePixelNativeExport" title="以真实低分辨率 (如 64x64) 导出原生像素图 PNG"><i data-lucide="download"></i> <span data-i18n="btnPixelNativeText">原生尺寸</span></button>
+      </div>
     </div>
 
     <!-- 容差与笔刷滑块 -->
@@ -560,7 +689,7 @@
     <div style="margin-top:auto;display:flex;flex-direction:column;gap:8px">
       <div id="edStatus" style="font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace"></div>
       <div class="row">
-        <button class="ghost" id="edSave" style="flex:1;justify-content:center" title="保存结果进图库 outputs/ 目录"><i data-lucide="save"></i> <span data-i18n="edSaveText">存进图库</span></button>
+        <button class="ghost" id="edSave" style="flex:1;justify-content:center" data-i18n-title="titleEdSave" title="保存结果进图库 outputs/ 目录"><i data-lucide="save"></i> <span data-i18n="edSaveText">存进图库</span></button>
         <button class="dl-primary" id="edDownload" style="flex:1;justify-content:center"><i data-lucide="download"></i> <span data-i18n="edDownloadText">下载 PNG</span></button>
       </div>
     </div>
@@ -574,10 +703,10 @@
         <option value="" data-i18n-opt="optUncat">未分类</option>
       </select>
     </span>
-    <button class="ghost" id="edAssign" title="把图移入选中项目"><i data-lucide="folder-output"></i> <span data-i18n="edAssignText">移入项目</span></button>
+    <button class="ghost" id="edAssign" data-i18n-title="titleEdAssign" title="把图移入选中项目"><i data-lucide="folder-output"></i> <span data-i18n="edAssignText">移入项目</span></button>
     <div class="sep"></div>
     <button class="ghost" id="edImport"><i data-lucide="image"></i> <span data-i18n="edImportText">导入本地图片</span></button>
-    <input type="file" id="edFile" accept="image/*" hidden>
+    <input type="file" id="edFile" accept="image/*" multiple hidden>
     <button class="ghost" id="edRefreshGal"><i data-lucide="rotate-cw"></i></button>
     <div class="sep"></div>
     <div id="edThumbs"></div>
@@ -588,6 +717,267 @@
 "use strict";
 const $ = id => document.getElementById(id);
 
+/* ================= 全局双语言国际化 i18n 引擎 (ZH / EN) =================
+   字典必须放在最前: loadSettings() / loadProjects() / refreshEngine() 在下面
+   模块初始化时就会调用 tr(), 若字典声明在后面会撞上 TDZ (ReferenceError)。 */
+const I18N = {
+  zh: {
+    /* ---- 静态节点 (data-i18n) ---- */
+    tabGen: "生图", tabEdit: "工作台", tabSettings: "设置",
+    sketchBase: "草图引导 (SKETCH BASE)", dropText: "点击选择图片或拖拽草图到此处", dropSub: "支持 PNG / JPG / WebP，自动轻量压缩", btnRemove: "移除",
+    promptTitle: "提示词 (PROMPT COMMAND)", promptPh: "例如：一把奇幻风格的火焰长剑，游戏道具图标，金色剑柄，华丽装饰... (Ctrl+Enter 快速生成)",
+    btnGenText: "生成资产图", placeholder: "生成资产图将在此展示", btnToEditor: "送入工作台", btnOrig: "下载原图",
+    apiSettings: "API 设置 (PROFILES)", profScheme: "配置方案", profNameLabel: "方案名称", profNamePh: "例如：A站·gpt-image / B站·nano-banana", btnDelete: "删除", apiType: "接口类型", optImages: "图像接口 /images", optChat: "对话接口 /chat", modelName: "模型选择 (MODEL)", btnFetch: "拉取模型",
+    modelSearchPh: "输入关键字搜索模型，或按 Enter 自定义…",
+    modelGroupImage: "出图与多模态模型", modelGroupAll: "所有可用模型", modelEmpty: "未找到匹配模型，可直接按 Enter 使用当前输入",
+    projLabel: "项目归档", optUncat: "未分类", optAll: "全部", projStyleLabel: "项目风格描述",
+    styleLabel: "美术风格", styleDefault: "默认（跟随提示词）", stylePixel: "像素风 Pixel Art", styleCartoon: "美式卡通 Cartoon", styleAnime: "二次元 Anime", styleLowpoly: "低多边形 Low Poly", styleRealistic: "写实 Realistic", styleWatercolor: "水彩手绘 Watercolor", styleCyberpunk: "赛博朋克 Cyberpunk", styleRender3d: "3D 渲染 3D Render",
+    sizeLabel: "分辨率", sizeAuto: "自动", size1536x1024: "1536 × 1024 横", size1024x1536: "1024 × 1536 竖", sizeCustom: "自定义…", sizeWLabel: "自定义宽", sizeHLabel: "自定义高",
+    bgLabel: "生成背景", bgWhite: "纯白（默认推荐）", bgGray: "中性灰", bgBlack: "纯黑", bgNone: "不指定", historyLabel: "历史图库",
+    cfgTitle: "导入 / 导出配置", cfgHint: "导出内容：<b>API 配置方案</b>与<b>项目清单及其风格设定</b>。<br>导入规则：<b>只新增、绝不覆盖</b>现有配置。", cfgExportText: "导出配置 JSON", cfgImportText: "导入配置 JSON",
+    edFit: "适配", edUndo: "撤销", edTrim: "裁透明边", edApplyCrop: "应用裁剪", autoPh: "自动",
+    inspectorTitle: "INSPECTOR 属性控制", mattingCardTitle: "AI 智能抠图引擎", edMattingText: "开始 AI 抠图",
+    modelLabel: "抠图模型", devLabel: "计算设备", devAuto: "自动", chokeLabel: "收边像素", enhLabel: "增强模式",
+    pixelCardTitle: "像素艺术纯化 (PIXEL CLEAN)", pixelGridLabel: "网格精度", pixelGridAuto: "自动检测",
+    pixelPaletteLabel: "色彩盘限制", pixelPalAuto: "自动保真 (无损)", pixelPal16: "16 色限制", pixelPal32: "32 色限制", pixelPal64: "64 色限制",
+    pixelHardAlphaLabel: "硬边缘透明化", btnPixelCleanText: "一键纯化色块", btnPixelNativeText: "原生尺寸",
+    btnQuickPixelCleanText: "像素纯化",
+    tolLabel: "色彩容差", brushLabel: "笔刷大小", exportCardTitle: "分辨率无损导出", widthLabel: "宽 (W)", heightLabel: "高 (H)", keepRatioLabel: "保持纵横比居中填充",
+    edExportText: "按分辨率导出 PNG", edSaveText: "存进图库", edDownloadText: "下载 PNG", edAssignText: "移入项目", edImportText: "导入本地图片",
+    initialEdStatus: "从下方图库单击一张图开始，或「导入本地图片」", edDropOverlayText: "拖放图片到此，立即载入 / 批量导入",
+    /* ---- 悬浮提示 (data-i18n-title) ---- */
+    toolPan: "移动画布 (Space/中键拖拽)", toolRestore: "按颜色点选恢复", toolErase: "按颜色点选擦除",
+    toolBrushR: "笔刷自由涂抹恢复", toolBrushE: "笔刷自由涂抹擦除", toolCrop: "框选裁剪区域",
+    titleTheme: "切换深色 / 浅色模式", titleLang: "Switch Language / 切换语言",
+    titleRemoveSketch: "移除草图", titleToEditor: "把当前图带进工作台进行 AI 抠图、精细修补、裁剪与导出",
+    titleProfDel: "删除当前方案", titleProjNew: "新建项目", titleProjRen: "重命名项目",
+    titleFetchModels: "从当前 API 地址在线拉取所有可用模型", titleToggleModelMenu: "展开/收起模型选择列表",
+    titleEdTrim: "自动裁掉四周多余透明边", titleEnh: "针对贴背景边缘与漏检强色块做补回处理",
+    titlePixelAlpha: "将半透明抗锯齿噪点二值化为硬边，确保边缘无白边与模糊",
+    titlePixelNativeExport: "以真实低分辨率 (如 64x64) 导出原生像素图 PNG",
+    titleQuickPixelClean: "将当前图像纯化为规整单色色块真像素图",
+    titleEdSave: "保存结果进图库 outputs/ 目录", titleEdAssign: "把图移入选中项目",
+    docTitle: "Sketch2Asset — 游戏资产生成与工作台", htmlLang: "zh-CN",
+    /* ---- 配置方案 chips ---- */
+    chipAdd: "＋ 新增", chipAddTitle: "新增一个空白 API 配置方案", chipProfN: "方案{n}",
+    chipNoBase: "未配置地址", chipModeChat: "对话接口", chipModeImages: "图像接口", chipDefaultModel: "默认模型",
+    /* ---- 生图页状态消息 ---- */
+    stProfSwitched: "已切换到方案「{name}」",
+    stKeepOneProfile: "至少保留一个方案",
+    stProfDeleted: "已删除方案「{name}」，当前：{cur}",
+    stNeedApiForModels: "请先填写 API 地址和 Key，再拉取模型列表",
+    stModelsFetched: "已从你的 API 拉取 {n} 个模型，其中疑似出图模型 {img} 个（已排在下拉最前）。清空模型输入框后点击输入框即可浏览选择。",
+    stModelsFetchFail: "拉取模型失败：{msg}",
+    stNeedApi: "请先在「API 设置」里填写 API 地址和 Key",
+    stNeedPrompt: "请填写提示词，或上传一张草图",
+    stGenerating: "生成中… 已用 {secs} 秒（图像生成通常需要 10~90 秒）",
+    stGenOk: "生成成功 · 走的接口: {via}{archived} · 用时 {secs} 秒",
+    stGenArchived: " · 已归档到「{proj}」",
+    stGenFail: "生成失败：{msg}",
+    stProjCreated: "已创建项目「{name}」：之后的生图会归档到该项目并沿用其风格设定",
+    stProjCreateFail: "创建项目失败：{msg}",
+    stPickProjToRename: "先在「项目」下拉里选中要重命名的项目",
+    stProjRenamed: "项目已重命名为「{name}」（目录与已归档图片同步迁移）",
+    stProjRenameFail: "重命名失败：{msg}",
+    stNoUndo: "没有可撤销的操作了（最多保留最近 6 步）",
+    stSelTooSmall: "选区太小",
+    stCropped: "已裁剪为 {w}×{h}",
+    stNoOpaque: "图里没有不透明内容",
+    stTrimmed: "已裁掉透明边，当前 {w}×{h}",
+    stRestored: "已恢复 {n} 像素（↩ 可撤销）",
+    stErased: "已擦除 {n} 像素（↩ 可撤销）",
+    stNotTransparent: "点击处不是透明区域",
+    stAlreadyTransparent: "点击处已是透明",
+    histItemTitle: "点击回看这张",
+    promptNewProj: "项目名称（中英文/数字/空格/-/_，不超过40字）：",
+    promptRenameProj: "新的项目名称：",
+    /* ---- 配置导入 / 导出 ---- */
+    cfgExported: "已导出 {profiles} 个 API 方案、{projects} 个项目的风格设定。",
+    cfgImported: "导入完成：\nAPI 方案 — 新增 {pAdd}（其中改名 {pRen}），相同跳过 {pSkip}\n项目 — 新增 {jAdd}（其中改名 {jRen}），相同跳过 {jSkip}{jFail}",
+    cfgImportedFail: "，失败 {n}",
+    cfgImportFail: "导入失败：{msg}",
+    cfgNotOurFile: "不是本工具导出的配置文件",
+    /* ---- 抠图引擎状态 ---- */
+    engineNotDownloaded: "（未下载·选中即下载）",
+    enginePending: "待首次运行",
+    engineDownloading: "⬇ 正在下载 {name}：{progress}",
+    engineReady: "引擎就绪 · {provider}{err}",
+    engineReadyErr: " · ⚠ {msg}",
+    engineMissing: "AI 未安装：命令行运行 python setup_matting.py",
+    /* ---- 工作台状态消息 ---- */
+    edDownloadStarted: "开始后台下载 {name}，完成后自动启用（进度见下方状态）",
+    edModelSwitched: "已切换模型，下次抠图生效（首次会重新加载模型）",
+    edModelSwitchFail: "切换模型失败：{msg}",
+    edDeviceSwitched: "设备已切换为 {dev}，下次抠图生效",
+    edDeviceSwitchFail: "切换设备失败：{msg}",
+    edLoaded: "已载入 {w}×{h}，可点「开始 AI 抠图」或直接修补 / 裁剪 / 导出",
+    edNoImages: "该筛选下没有图片：先去「生图」，或点「导入本地图片」",
+    edOnlyGalleryMovable: "只有从图库载入的图才能移动；导入的本地图请用「存进图库」存入目标项目",
+    edPickTargetProj: "请先在「项目」筛选里选中目标项目（或「未分类」），再点移入",
+    edMovedTo: "已移入「{proj}」",
+    edMoveFail: "移动失败：{msg}",
+    edNeedImage: "请先从图库选择或导入一张图",
+    edMattingRunning: "AI 抠图处理中…（首次调用需加载模型）",
+    edMattingDone: "抠图完成。可用修补工具微调，然后导出 / 保存到图库",
+    edMattingFail: "抠图失败：{msg}",
+    edPixelCleaned: "像素纯化完成：网格 {grid}，保留 {colors} 种单一色块",
+    edBatchImportOk: "已批量导入 {count} 张图片到图库，并已载入第一张",
+    edNeedSize: "请填写导出宽或高（只填一个则按比例算另一个）",
+    edExported: "已导出 {w}×{h} PNG（保持比例时多余部分为透明）",
+    edSaving: "保存中…",
+    edSaved: "已保存到图库：{path}",
+    edSaveFail: "保存失败：{msg}",
+    /* ---- 按钮忙碌态 ---- */
+    btnFetchBusy: "拉取中…", btnGenBusy: "生成中…"
+  },
+  en: {
+    /* ---- Static nodes ---- */
+    tabGen: "Generate", tabEdit: "Studio", tabSettings: "Settings",
+    sketchBase: "SKETCH BASE", dropText: "Click to select or drag sketch here", dropSub: "Supports PNG / JPG / WebP (auto compressed)", btnRemove: "Remove",
+    promptTitle: "PROMPT COMMAND", promptPh: "e.g. A fantasy flame sword, game item icon, golden hilt... (Ctrl+Enter)",
+    btnGenText: "Generate Asset", placeholder: "Generated asset will appear here", btnToEditor: "Send to Studio", btnOrig: "Download Raw",
+    apiSettings: "API PROFILES", profScheme: "Profiles", profNameLabel: "Profile Name", profNamePh: "e.g. Vendor A · gpt-image / Vendor B · nano-banana", btnDelete: "Delete", apiType: "API Type", optImages: "Images Endpoint", optChat: "Chat Endpoint", modelName: "Model Selection", btnFetch: "Fetch Models",
+    modelSearchPh: "Search models or press Enter to set custom...",
+    modelGroupImage: "Image & Multimodal Models", modelGroupAll: "All Available Models", modelEmpty: "No matching models found. Press Enter to use current input",
+    projLabel: "Project Hub", optUncat: "Uncategorized", optAll: "All Projects", projStyleLabel: "Project Style Prompt",
+    styleLabel: "Art Style", styleDefault: "Default (Follow Prompt)", stylePixel: "Pixel Art", styleCartoon: "Cartoon", styleAnime: "Anime", styleLowpoly: "Low Poly", styleRealistic: "Realistic", styleWatercolor: "Watercolor", styleCyberpunk: "Cyberpunk", styleRender3d: "3D Render",
+    sizeLabel: "Resolution", sizeAuto: "Auto", size1536x1024: "1536 × 1024 Land", size1024x1536: "1024 × 1536 Port", sizeCustom: "Custom…", sizeWLabel: "Custom Width", sizeHLabel: "Custom Height",
+    bgLabel: "Background", bgWhite: "Pure White (Recommended)", bgGray: "Studio Gray", bgBlack: "Pure Black", bgNone: "Unspecified", historyLabel: "History Wall",
+    cfgTitle: "Import / Export Config", cfgHint: "Exports <b>API profiles</b> and <b>projects with style prompts</b>.<br>Import rule: <b>appends new entries only</b>, never overwrites.", cfgExportText: "Export Config JSON", cfgImportText: "Import Config JSON",
+    edFit: "Fit View", edUndo: "Undo", edTrim: "Trim Transparent", edApplyCrop: "Apply Crop", autoPh: "Auto",
+    inspectorTitle: "INSPECTOR CONTROLS", mattingCardTitle: "AI MATTING ENGINE", edMattingText: "Run AI Matting",
+    modelLabel: "Matting Model", devLabel: "Compute Device", devAuto: "Auto", chokeLabel: "Choke Border", enhLabel: "Enhance Mode",
+    pixelCardTitle: "PIXEL ART CLEANER", pixelGridLabel: "Grid Resolution", pixelGridAuto: "Auto Detect",
+    pixelPaletteLabel: "Palette Limit", pixelPalAuto: "Auto / Lossless", pixelPal16: "16 Colors", pixelPal32: "32 Colors", pixelPal64: "64 Colors",
+    pixelHardAlphaLabel: "Hard Alpha Edges", btnPixelCleanText: "Clean Pixel Art", btnPixelNativeText: "Native Res",
+    btnQuickPixelCleanText: "Pixel Clean",
+    tolLabel: "Color Tolerance", brushLabel: "Brush Size", exportCardTitle: "LOSSLESS EXPORT", widthLabel: "Width (W)", heightLabel: "Height (H)", keepRatioLabel: "Maintain Aspect Ratio",
+    edExportText: "Export Custom PNG", edSaveText: "Save to Gallery", edDownloadText: "Download PNG", edAssignText: "Move to Project", edImportText: "Import Local Image",
+    initialEdStatus: "Click an image below or 'Import Local Image'", edDropOverlayText: "Drop images here to load or batch import",
+    /* ---- Tooltips ---- */
+    toolPan: "Move Canvas (Space/Middle Drag)", toolRestore: "Color Pick Restore", toolErase: "Color Pick Erase",
+    toolBrushR: "Brush Restore", toolBrushE: "Brush Erase", toolCrop: "Crop Region",
+    titleTheme: "Toggle Dark / Light Mode", titleLang: "Switch Language / 切换语言",
+    titleRemoveSketch: "Remove sketch", titleToEditor: "Send this image to the Studio for AI matting, retouching, cropping and export",
+    titleProfDel: "Delete current profile", titleProjNew: "New project", titleProjRen: "Rename project",
+    titleFetchModels: "Fetch all available models online from current API base", titleToggleModelMenu: "Toggle model dropdown list",
+    titleEdTrim: "Auto-crop surplus transparent margins", titleEnh: "Recovers strong-colour areas the model missed near the background edge",
+    titlePixelAlpha: "Binarize semi-transparent anti-aliasing pixels into hard edges",
+    titlePixelNativeExport: "Export native low-resolution (e.g. 64x64) PNG",
+    titleQuickPixelClean: "Clean AI pixel art into true flat-color blocks",
+    titleEdSave: "Save the result into the outputs/ gallery", titleEdAssign: "Move this image into the selected project",
+    docTitle: "Sketch2Asset — Game Asset Generator & Studio", htmlLang: "en",
+    /* ---- Profile chips ---- */
+    chipAdd: "＋ New", chipAddTitle: "Add a blank API profile", chipProfN: "Profile {n}",
+    chipNoBase: "No base URL", chipModeChat: "Chat endpoint", chipModeImages: "Images endpoint", chipDefaultModel: "Default model",
+    /* ---- Generate view status ---- */
+    stProfSwitched: "Switched to profile \"{name}\"",
+    stKeepOneProfile: "At least one profile must remain",
+    stProfDeleted: "Deleted profile \"{name}\", now on: {cur}",
+    stNeedApiForModels: "Fill in the API base URL and key first, then fetch the model list",
+    stModelsFetched: "Fetched {n} models from your API, {img} of which look like image models (sorted to the top). Clear the model box and click it to browse.",
+    stModelsFetchFail: "Failed to fetch models: {msg}",
+    stNeedApi: "Fill in the API base URL and key under \"API PROFILES\" first",
+    stNeedPrompt: "Enter a prompt, or upload a sketch",
+    stGenerating: "Generating… {secs}s elapsed (image generation usually takes 10-90s)",
+    stGenOk: "Done · endpoint: {via}{archived} · took {secs}s",
+    stGenArchived: " · archived to \"{proj}\"",
+    stGenFail: "Generation failed: {msg}",
+    stProjCreated: "Created project \"{name}\": new images will be archived there and inherit its style settings",
+    stProjCreateFail: "Failed to create project: {msg}",
+    stPickProjToRename: "Select the project to rename in the \"Project Hub\" dropdown first",
+    stProjRenamed: "Renamed project to \"{name}\" (folder and archived images moved too)",
+    stProjRenameFail: "Rename failed: {msg}",
+    stNoUndo: "Nothing left to undo (only the last 6 steps are kept)",
+    stSelTooSmall: "Selection too small",
+    stCropped: "Cropped to {w}×{h}",
+    stNoOpaque: "No opaque content in this image",
+    stTrimmed: "Trimmed transparent margins, now {w}×{h}",
+    stRestored: "Restored {n} pixels (Ctrl+Z to undo)",
+    stErased: "Erased {n} pixels (Ctrl+Z to undo)",
+    stNotTransparent: "That spot is not transparent",
+    stAlreadyTransparent: "That spot is already transparent",
+    histItemTitle: "Click to view this one again",
+    promptNewProj: "Project name (letters/digits/space/-/_, max 40 chars):",
+    promptRenameProj: "New project name:",
+    /* ---- Config import / export ---- */
+    cfgExported: "Exported {profiles} API profiles and style settings for {projects} projects.",
+    cfgImported: "Import complete:\nAPI profiles — added {pAdd} (renamed {pRen}), identical skipped {pSkip}\nProjects — added {jAdd} (renamed {jRen}), identical skipped {jSkip}{jFail}",
+    cfgImportedFail: ", failed {n}",
+    cfgImportFail: "Import failed: {msg}",
+    cfgNotOurFile: "Not a config file exported by this tool",
+    /* ---- Matting engine status ---- */
+    engineNotDownloaded: " (not downloaded · selecting downloads it)",
+    enginePending: "Pending First Run",
+    engineDownloading: "⬇ Downloading {name}: {progress}",
+    engineReady: "Engine ready · {provider}{err}",
+    engineReadyErr: " · ⚠ {msg}",
+    engineMissing: "AI matting not installed. Run: python setup_matting.py",
+    /* ---- Studio status ---- */
+    edDownloadStarted: "Downloading {name} in the background; it activates automatically when done (progress shown below)",
+    edModelSwitched: "Model switched, effective on the next matting run (the first run reloads the model)",
+    edModelSwitchFail: "Failed to switch model: {msg}",
+    edDeviceSwitched: "Device switched to {dev}, effective on the next matting run",
+    edDeviceSwitchFail: "Failed to switch device: {msg}",
+    edLoaded: "Loaded {w}×{h} — hit \"Run AI Matting\", or retouch / crop / export directly",
+    edNoImages: "No images under this filter: go to \"Generate\", or click \"Import Local Image\"",
+    edOnlyGalleryMovable: "Only images loaded from the gallery can be moved; for imported local files use \"Save to Gallery\" instead",
+    edPickTargetProj: "Pick the target project (or \"Uncategorized\") in the Project filter first, then move",
+    edMovedTo: "Moved into \"{proj}\"",
+    edMoveFail: "Move failed: {msg}",
+    edNeedImage: "Select an image from the gallery or import one first",
+    edMattingRunning: "AI matting in progress… (the first call loads the model)",
+    edMattingDone: "Matting done. Retouch as needed, then export or save to the gallery",
+    edMattingFail: "Matting failed: {msg}",
+    edPixelCleaned: "Pixel art cleaned: grid {grid}, {colors} unique color blocks",
+    edBatchImportOk: "Batch imported {count} images into gallery, loaded the first one",
+    edNeedSize: "Enter an export width or height (fill just one to derive the other by ratio)",
+    edExported: "Exported {w}×{h} PNG (with aspect ratio kept, the surplus area is transparent)",
+    edSaving: "Saving…",
+    edSaved: "Saved to gallery: {path}",
+    edSaveFail: "Save failed: {msg}",
+    /* ---- Busy button labels ---- */
+    btnFetchBusy: "Fetching…", btnGenBusy: "Generating…"
+  }
+};
+
+let currentLang = localStorage.getItem("s2a_lang") === "en" ? "en" : "zh";
+
+/**
+ * 取词。{name} 占位符由 vars 填充。
+ * - 未登记的 key 原样返回, 遗漏时页面上直接看得见, 不会静默变空。
+ * - vars 里值为 undefined/null 的占位符渲染成空串 —— 可选片段直接不传即可。
+ * - vars 里的 {k:"key", v:{...}} 形式会在渲染时才递归取词, 这样切换语言后
+ *   嵌套片段(如"已归档到「X」")也跟着翻译, 而不是停留在写入时的语言。
+ */
+function tr(key, vars){
+  const dict = I18N[currentLang] || I18N.zh;
+  let s = dict[key];
+  if (s === undefined) s = I18N.zh[key];
+  if (s === undefined) return key;
+  if (!vars) return s;
+  return s.replace(/\{(\w+)\}/g, (m, k) => {
+    const v = vars[k];
+    if (v === undefined || v === null) return "";
+    return (typeof v === "object" && v.k) ? tr(v.k, v.v) : String(v);
+  });
+}
+
+/**
+ * 只替换按钮内部的文字节点, 保留 <i data-lucide> 图标与 data-i18n 标记。
+ * 直接给按钮赋 textContent 会把图标和 i18n 标记一起抹掉, 之后再也无法翻译。
+ */
+function setBtnLabel(el, key){
+  if (!el) return;
+  const span = el.querySelector("[data-i18n]");
+  if (span){
+    span.setAttribute("data-i18n", key);
+    span.textContent = tr(key);
+  } else {
+    el.textContent = tr(key);
+  }
+}
+
 /* ---------------- 设置：多 API 配置方案，保存在 localStorage ---------------- */
 const SET_KEY = "s2a_settings_v1";
 const PROFILE_FIELDS = ["apiBase", "apiKey", "apiMode", "apiModel"];   // 随方案切换
@@ -597,40 +987,71 @@ let SET = { profiles: [], active: 0 };
 let personalStyle = null;      // 未分类时的个人风格选择（项目会临时覆盖风格下拉）
 let savedProjSel = "";         // 上次选中的项目
 
-function cur(){ return SET.profiles[SET.active]; }
+function cur(){ return SET.profiles[SET.active] || SET.profiles[0] || {}; }
 
-function loadSettings(){
-  let s = {};
-  try { s = JSON.parse(localStorage.getItem(SET_KEY) || "{}"); } catch(e){}
+function parseSettingsObject(s){
+  if (!s || typeof s !== "object") return;
   if (Array.isArray(s.profiles) && s.profiles.length){
     SET.profiles = s.profiles;
     SET.active = Math.min(s.active || 0, s.profiles.length - 1);
   } else {
-    // 旧版单配置自动迁移为第一个方案
-    SET.profiles = [{ name: s.apiBase ? "默认" : "方案1",
+    SET.profiles = [{ name: tr("chipProfN", { n: 1 }),
                       apiBase: s.apiBase || "", apiKey: s.apiKey || "",
                       apiMode: s.apiMode || "images", apiModel: s.apiModel || "",
                       models: null }];
     SET.active = 0;
   }
-  globalIds.forEach(id => { if (s[id] !== undefined) $(id).value = s[id]; });
-  globalChecks.forEach(id => { if (s[id] !== undefined) $(id).checked = !!s[id]; });
-  if (s.bgSel === undefined && s.whiteBg !== undefined)   // 旧版白底开关迁移
+  globalIds.forEach(id => { if (s[id] !== undefined && $(id)) $(id).value = s[id]; });
+  globalChecks.forEach(id => { if (s[id] !== undefined && $(id)) $(id).checked = !!s[id]; });
+  if (s.bgSel === undefined && s.whiteBg !== undefined && $("bgSel"))
     $("bgSel").value = s.whiteBg ? "white" : "none";
-  if (!["white", "gray", "black", "none"].includes($("bgSel").value))
-    $("bgSel").value = "white";                            // 已移除的背景色(绿/蓝/品红/自定义)迁回白底
+  if ($("bgSel") && !["white", "gray", "black", "none"].includes($("bgSel").value))
+    $("bgSel").value = "white";
   syncGenOpts();
-  personalStyle = $("style").value;
+  personalStyle = $("style") ? $("style").value : null;
   savedProjSel = s.projSel || "";
   applyProfile();
-  if (!cur().apiKey) $("settingsBox").open = true;   // 当前方案没配过就展开设置
+  if (!cur().apiKey && $("settingsBox")) $("settingsBox").open = true;
 }
+
+function loadSettings(){
+  let localS = {};
+  try { localS = JSON.parse(localStorage.getItem(SET_KEY) || "{}"); } catch(e){}
+  parseSettingsObject(localS);
+
+  // 从本地服务器 config.json 异步拉取持久化配置，解决跨端口/清理缓存后配置丢失问题
+  fetch("/api/settings")
+    .then(r => r.json())
+    .then(d => {
+      if (d && d.settings && d.settings.profiles && d.settings.profiles.length){
+        parseSettingsObject(d.settings);
+        localStorage.setItem(SET_KEY, JSON.stringify(d.settings));
+      } else if (localS && localS.profiles && localS.profiles.some(p => p.apiKey || p.apiBase)){
+        saveSettingsToServer(localS);
+      }
+    })
+    .catch(() => {});
+}
+
+let saveServerTimer = null;
+function saveSettingsToServer(s){
+  clearTimeout(saveServerTimer);
+  saveServerTimer = setTimeout(() => {
+    fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(s)
+    }).catch(() => {});
+  }, 300);
+}
+
 function saveSettings(){
   const s = { profiles: SET.profiles, active: SET.active };
-  globalIds.forEach(id => s[id] = $(id).value);
-  globalChecks.forEach(id => s[id] = $(id).checked);
-  s.projSel = $("projSel").value;
+  globalIds.forEach(id => { if ($(id)) s[id] = $(id).value; });
+  globalChecks.forEach(id => { if ($(id)) s[id] = $(id).checked; });
+  s.projSel = $("projSel") ? $("projSel").value : "";
   localStorage.setItem(SET_KEY, JSON.stringify(s));
+  saveSettingsToServer(s);
 }
 function applyProfile(){
   const p = cur();
@@ -646,27 +1067,29 @@ function renderChips(){
   const box = $("profileChips");
   box.innerHTML = "";
   SET.profiles.forEach((p, i) => {
+    // p.name 是用户数据(创建时写入并持久化), 不随语言翻译; 只有空名时用当前语言兜底
+    const label = p.name || tr("chipProfN", { n: i + 1 });
     const b = document.createElement("button");
     b.className = "ghost chip" + (i === SET.active ? " active" : "");
-    b.textContent = p.name || ("方案" + (i + 1));
-    b.title = (p.apiBase || "未配置地址") + " · " +
-              (p.apiMode === "chat" ? "对话接口" : "图像接口") + " · " +
-              (p.apiModel || "默认模型");
+    b.textContent = label;
+    b.title = (p.apiBase || tr("chipNoBase")) + " · " +
+              tr(p.apiMode === "chat" ? "chipModeChat" : "chipModeImages") + " · " +
+              (p.apiModel || tr("chipDefaultModel"));
     b.addEventListener("click", () => {
       if (SET.active === i) return;
       SET.active = i;
       applyProfile();
       saveSettings();
-      setStatus("ok", "已切换到方案「" + (p.name || "方案" + (i + 1)) + "」");
+      setStatus("ok", "stProfSwitched", { name: label });
     });
     box.appendChild(b);
   });
   const add = document.createElement("button");
   add.className = "ghost chip";
-  add.textContent = "＋ 新增";
-  add.title = "新增一个空白 API 配置方案";
+  add.textContent = tr("chipAdd");
+  add.title = tr("chipAddTitle");
   add.addEventListener("click", () => {
-    SET.profiles.push({ name: "方案" + (SET.profiles.length + 1),
+    SET.profiles.push({ name: tr("chipProfN", { n: SET.profiles.length + 1 }),
                         apiBase: "", apiKey: "",
                         apiMode: cur().apiMode || "images", apiModel: "", models: null });
     SET.active = SET.profiles.length - 1;
@@ -692,13 +1115,13 @@ $("profName").addEventListener("change", () => {
   renderChips();
 });
 $("profDel").addEventListener("click", () => {
-  if (SET.profiles.length <= 1) return setStatus("err", "至少保留一个方案");
+  if (SET.profiles.length <= 1) return setStatus("err", "stKeepOneProfile");
   const name = cur().name;
   SET.profiles.splice(SET.active, 1);
   SET.active = Math.max(0, SET.active - 1);
   applyProfile();
   saveSettings();
-  setStatus("ok", "已删除方案「" + name + "」，当前：" + cur().name);
+  setStatus("ok", "stProfDeleted", { name, cur: cur().name });
 });
 globalIds.forEach(id => $(id).addEventListener("change", saveSettings));
 globalChecks.forEach(id => $(id).addEventListener("change", saveSettings));
@@ -716,31 +1139,158 @@ const DEFAULT_MODELS = [
 ];
 const IMG_HINT = /image|img|dall|flux|seedream|seededit|banana|imagen|stable|sdxl|sd3|midjourney|\bmj\b|kolors|cogview|wanx|hunyuan-image|ideogram|recraft|playground|pixart|photon|irag/i;
 
+let currentModelList = [];
+
 function sortModels(ids){
   const img = ids.filter(i => IMG_HINT.test(i));
   const rest = ids.filter(i => !IMG_HINT.test(i));
   return [...img, ...rest];
 }
-function populateModels(list){
-  const dl = $("modelList");
-  dl.innerHTML = "";
-  for (const id of list.slice(0, 800)){
-    const o = document.createElement("option");
-    o.value = id;
-    dl.appendChild(o);
+
+function renderModelDropdownItems(filterText = ""){
+  const container = $("modelListItems");
+  if (!container) return;
+  container.innerHTML = "";
+  
+  const q = (filterText || "").trim().toLowerCase();
+  const models = currentModelList.length ? currentModelList : DEFAULT_MODELS;
+  const filtered = q ? models.filter(m => m.toLowerCase().includes(q)) : models;
+  const curVal = $("apiModel").value.trim();
+
+  if (!filtered.length){
+    const empty = document.createElement("div");
+    empty.className = "model-empty";
+    empty.textContent = tr("modelEmpty");
+    container.appendChild(empty);
+    return;
+  }
+
+  const imgModels = filtered.filter(i => IMG_HINT.test(i));
+  const otherModels = filtered.filter(i => !IMG_HINT.test(i));
+
+  const appendGroup = (titleKey, items, isImage) => {
+    if (!items.length) return;
+    const title = document.createElement("div");
+    title.className = "model-group-title";
+    title.innerHTML = isImage ? `<i data-lucide="sparkles" style="width:11px;height:11px;color:var(--accent)"></i> <span>${tr(titleKey)}</span>`
+                              : `<i data-lucide="layers" style="width:11px;height:11px;color:var(--muted)"></i> <span>${tr(titleKey)}</span>`;
+    container.appendChild(title);
+
+    items.forEach(id => {
+      const item = document.createElement("div");
+      item.className = "model-item" + (id === curVal ? " selected" : "");
+      
+      const nameSpan = document.createElement("span");
+      nameSpan.textContent = id;
+      nameSpan.style.wordBreak = "break-all";
+      item.appendChild(nameSpan);
+
+      if (isImage){
+        const badge = document.createElement("span");
+        badge.className = "model-badge";
+        badge.textContent = "IMAGE";
+        item.appendChild(badge);
+      }
+
+      item.addEventListener("click", () => {
+        selectModel(id);
+      });
+      container.appendChild(item);
+    });
+  };
+
+  if (imgModels.length) appendGroup("modelGroupImage", imgModels, true);
+  if (otherModels.length) appendGroup("modelGroupAll", otherModels, false);
+
+  if (window.lucide) lucide.createIcons();
+}
+
+function selectModel(modelId){
+  $("apiModel").value = modelId;
+  cur().apiModel = modelId;
+  saveSettings();
+  renderChips();
+  closeModelMenu();
+}
+
+function openModelMenu(){
+  const menu = $("modelDropdownMenu");
+  if (!menu) return;
+  menu.classList.add("show");
+  if ($("modelSearchInput")) {
+    $("modelSearchInput").value = "";
+    renderModelDropdownItems("");
+    setTimeout(() => {
+      const sel = menu.querySelector(".model-item.selected");
+      if (sel) sel.scrollIntoView({ block: "nearest" });
+      $("modelSearchInput").focus();
+    }, 30);
   }
 }
+
+function closeModelMenu(){
+  const menu = $("modelDropdownMenu");
+  if (menu) menu.classList.remove("show");
+}
+
+function toggleModelMenu(){
+  const menu = $("modelDropdownMenu");
+  if (!menu) return;
+  if (menu.classList.contains("show")) closeModelMenu();
+  else openModelMenu();
+}
+
+function populateModels(list){
+  currentModelList = Array.isArray(list) && list.length ? list : DEFAULT_MODELS;
+  renderModelDropdownItems($("modelSearchInput") ? $("modelSearchInput").value : "");
+}
+
+// 绑定下拉选择器交互事件
+$("apiModel").addEventListener("click", openModelMenu);
+$("btnToggleModelMenu").addEventListener("click", e => {
+  e.stopPropagation();
+  toggleModelMenu();
+});
+$("modelSearchInput").addEventListener("input", e => {
+  renderModelDropdownItems(e.target.value);
+});
+$("modelSearchInput").addEventListener("keydown", e => {
+  if (e.key === "Enter"){
+    e.preventDefault();
+    const q = $("modelSearchInput").value.trim();
+    if (q){
+      const items = $("modelListItems").querySelectorAll(".model-item");
+      if (items.length) {
+        const textNode = items[0].querySelector("span");
+        selectModel(textNode ? textNode.textContent : q);
+      } else {
+        selectModel(q);
+      }
+    }
+  } else if (e.key === "Escape"){
+    closeModelMenu();
+  }
+});
+
+// 点击外部关闭
+document.addEventListener("click", e => {
+  const wrap = $("modelCombobox");
+  if (wrap && !wrap.contains(e.target)){
+    closeModelMenu();
+  }
+});
+
 loadSettings();   // 放在 DEFAULT_MODELS 之后调用: applyProfile 需要用它填充模型下拉
 
 $("btnFetchModels").addEventListener("click", async () => {
   const apiBase = $("apiBase").value.trim(), apiKey = $("apiKey").value.trim();
   if (!apiBase || !apiKey){
     $("settingsBox").open = true;
-    return setStatus("err", "请先填写 API 地址和 Key，再拉取模型列表");
+    return setStatus("err", "stNeedApiForModels");
   }
   const btn = $("btnFetchModels");
   btn.disabled = true;
-  btn.textContent = "拉取中…";
+  setBtnLabel(btn, "btnFetchBusy");
   try {
     const r = await fetch("/api/models", {
       method: "POST",
@@ -754,13 +1304,13 @@ $("btnFetchModels").addEventListener("click", async () => {
     cur().models = sorted;          // 模型列表随方案保存
     saveSettings();
     const nImg = sorted.filter(i => IMG_HINT.test(i)).length;
-    setStatus("ok", "已从你的 API 拉取 " + d.models.length + " 个模型，其中疑似出图模型 " +
-                    nImg + " 个（已排在下拉最前）。清空模型输入框后点击输入框即可浏览选择。");
+    setStatus("ok", "stModelsFetched", { n: d.models.length, img: nImg });
+    openModelMenu();                // 拉取成功后自动展开供用户挑选
   } catch (err) {
-    setStatus("err", "拉取模型失败：" + err.message);
+    setStatus("err", "stModelsFetchFail", { msg: err.message });
   } finally {
     btn.disabled = false;
-    btn.textContent = "🔄 拉取";
+    setBtnLabel(btn, "btnFetch");
   }
 });
 
@@ -872,12 +1422,33 @@ function buildPrompt(){
   return p;
 }
 
-/* ---------------- 状态提示 ---------------- */
-function setStatus(kind, text){
+/* ---------------- 状态提示 ----------------
+   记住 key 与参数而非渲染后的字符串, 这样切换语言时能重新渲染当前这条消息,
+   不必再靠子串嗅探去猜它说的是什么。 */
+let lastStatus = null;    // {kind, key, vars}
+let lastEdMsg = null;     // {key, vars}
+let lastCfgStatus = null; // {key, vars}
+
+function setStatus(kind, key, vars){
   const b = $("statusBox");
-  if (!kind){ b.className = ""; return; }
+  if (!kind){ b.className = ""; lastStatus = null; return; }
+  lastStatus = { kind, key, vars };
   b.className = "show " + kind;
-  b.textContent = text;
+  b.textContent = tr(key, vars);
+}
+function edMsg(key, vars){
+  lastEdMsg = key ? { key, vars } : null;
+  $("edStatus").textContent = key ? tr(key, vars) : "";
+}
+function cfgStatus(key, vars){
+  lastCfgStatus = key ? { key, vars } : null;
+  $("cfgStatus").textContent = key ? tr(key, vars) : "";
+}
+// 切换语言后重渲染这三条动态消息 (由 applyLanguage 调用)
+function retranslateDynamic(){
+  if (lastStatus) $("statusBox").textContent = tr(lastStatus.key, lastStatus.vars);
+  $("edStatus").textContent = lastEdMsg ? tr(lastEdMsg.key, lastEdMsg.vars) : tr("initialEdStatus");
+  if (lastCfgStatus) $("cfgStatus").textContent = tr(lastCfgStatus.key, lastCfgStatus.vars);
 }
 
 /* ---------------- 生成 ---------------- */
@@ -892,10 +1463,10 @@ async function generate(){
   if (busy) return;
   if (!$("apiBase").value.trim() || !$("apiKey").value.trim()){
     $("settingsBox").open = true;
-    return setStatus("err", "请先在「API 设置」里填写 API 地址和 Key");
+    return setStatus("err", "stNeedApi");
   }
   if (!$("prompt").value.trim() && !sketchDataUrl)
-    return setStatus("err", "请填写提示词，或上传一张草图");
+    return setStatus("err", "stNeedPrompt");
 
   const payload = {
     apiBase: $("apiBase").value.trim(),
@@ -912,10 +1483,10 @@ async function generate(){
   busy = true;
   $("btnGen").disabled = true;
   $("btnGen").classList.add("busy");
-  $("btnGenText").textContent = "生成中…";
+  setBtnLabel($("btnGenText"), "btnGenBusy");
   const t0 = performance.now();
   timerId = setInterval(() =>
-    setStatus("info", "生成中… 已用 " + ((performance.now() - t0) / 1000).toFixed(1) + " 秒（图像生成通常需要 10~90 秒）"), 200);
+    setStatus("info", "stGenerating", { secs: ((performance.now() - t0) / 1000).toFixed(1) }), 200);
 
   try {
     const r = await fetch("/api/generate", {
@@ -926,20 +1497,34 @@ async function generate(){
     const data = await r.json();
     if (data.error) throw new Error(data.error);
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
-    showResult(data.image, true);
+    let finalImg = data.image;
+    if ($("style").value === "pixel"){
+      try {
+        const im = await loadImage(data.image);
+        const cv = document.createElement("canvas");
+        cv.width = im.naturalWidth; cv.height = im.naturalHeight;
+        cv.getContext("2d").drawImage(im, 0, 0);
+        const res = cleanPixelArtCanvas(cv, { grid: "auto", palette: "auto", hardAlpha: false, denoise: true });
+        finalImg = res.canvas.toDataURL("image/png");
+      } catch(e){}
+    }
+    showResult(finalImg, true);
     currentOriginalUrl = data.saved || null;
     loadProjects();               // 刷新项目图片计数
-    setStatus("ok", "生成成功 · 走的接口: " + (data.via || "?") +
-                    ($("projSel").value ? " · 已归档到「" + $("projSel").value + "」" : "") +
-                    " · 用时 " + secs + " 秒");
+    const proj = $("projSel").value;
+    setStatus("ok", "stGenOk", {
+      via: data.via || "?", secs,
+      // 嵌套 key: 切换语言时"已归档到「X」"这半句也跟着翻译
+      archived: proj ? { k: "stGenArchived", v: { proj } } : null
+    });
   } catch (err) {
-    setStatus("err", "生成失败：" + err.message);
+    setStatus("err", "stGenFail", { msg: err.message });
   } finally {
     busy = false;
     clearInterval(timerId);
     $("btnGen").disabled = false;
     $("btnGen").classList.remove("busy");
-    $("btnGenText").textContent = "✨ 生成资产图";
+    setBtnLabel($("btnGenText"), "btnGenText");
   }
 }
 
@@ -951,13 +1536,34 @@ function showResult(dataUrl, pushHistory){
   $("placeholder").style.display = "none";
   $("btnOrig").disabled = false;
   $("btnToEditor").disabled = false;
+  $("btnQuickPixelClean").style.display = "";
+  $("btnQuickPixelClean").disabled = false;
   if (pushHistory) addHistory(dataUrl);
   markActiveHistory(dataUrl);
 }
+
+$("btnQuickPixelClean").addEventListener("click", async () => {
+  if (!currentOriginal) return;
+  const im = await loadImage(currentOriginal);
+  const cv = document.createElement("canvas");
+  cv.width = im.naturalWidth; cv.height = im.naturalHeight;
+  const ctx = cv.getContext("2d");
+  ctx.drawImage(im, 0, 0);
+  const res = cleanPixelArtCanvas(cv, {
+    grid: "auto",
+    palette: "auto",
+    hardAlpha: true,
+    denoise: true
+  });
+  const cleanedUrl = res.canvas.toDataURL("image/png");
+  showResult(cleanedUrl, true);
+  setStatus("ok", "edPixelCleaned", { grid: `${res.gw}×${res.gh}`, colors: res.colorCount });
+});
 function addHistory(url){
   const im = document.createElement("img");
   im.src = url;
-  im.title = "点击回看这张";
+  im.dataset.i18nTitle = "histItemTitle";   // 让 applyLanguage 顺带翻译
+  im.title = tr("histItemTitle");
   im.addEventListener("click", async () => {
     showResult(await toDataUrl(url), false);
     currentOriginalUrl = url.startsWith("data:") ? null : url;
@@ -993,23 +1599,36 @@ let PROJECTS = [];   // [{name, style, stylePrompt, count}]
 function projActive(){
   return $("projSel").value ? PROJECTS.find(p => p.name === $("projSel").value) : null;
 }
-async function loadProjects(){
-  try {
-    const d = await (await fetch("/api/projects")).json();
-    PROJECTS = d.projects || [];
-  } catch (e){ PROJECTS = []; }
+/**
+ * 用 PROJECTS 缓存重建两个项目下拉。与拉取分离, 好让切换语言时只重建、不重新请求。
+ * 「全部」「未分类」两项以前是写死的中文字面量, applyLanguage 又按 data-i18n-opt
+ * 扫不到它们(动态创建的 Option 没有该属性), 于是永远显示中文 —— 这里补上标记。
+ */
+function rebuildProjectSelects(){
   const build = (sel, withAll) => {
-    const want = sel.value || (sel === $("projSel") ? savedProjSel : sel.value);
+    const want = sel.value || (sel === $("projSel") ? savedProjSel : "");
     sel.innerHTML = "";
-    if (withAll) sel.appendChild(new Option("全部", "_all"));
-    sel.appendChild(new Option("未分类", ""));
+    const opt = (label, value, i18nKey) => {
+      const o = new Option(label, value);
+      if (i18nKey) o.dataset.i18nOpt = i18nKey;
+      sel.appendChild(o);
+    };
+    if (withAll) opt(tr("optAll"), "_all", "optAll");
+    opt(tr("optUncat"), "", "optUncat");
     for (const p of PROJECTS)
-      sel.appendChild(new Option(p.name + "（" + p.count + "）", p.name));
+      opt(p.name + "（" + p.count + "）", p.name);   // 项目名是用户数据, 不翻译
     if ([...sel.options].some(o => o.value === want)) sel.value = want;
   };
   build($("projSel"), false);
   build($("edProjSel"), true);
   syncProjectUI();
+}
+async function loadProjects(){
+  try {
+    const d = await (await fetch("/api/projects")).json();
+    PROJECTS = d.projects || [];
+  } catch (e){ PROJECTS = []; }
+  rebuildProjectSelects();
 }
 function syncProjectUI(){
   const p = projActive();
@@ -1028,7 +1647,7 @@ $("projSel").addEventListener("change", () => {
   reloadHistory();
 });
 $("projNew").addEventListener("click", async () => {
-  const name = (window.prompt("项目名称（中英文/数字/空格/-/_，不超过40字）：") || "").trim();
+  const name = (window.prompt(tr("promptNewProj")) || "").trim();
   if (!name) return;
   try {
     const r = await fetch("/api/projects", { method: "POST",
@@ -1041,15 +1660,15 @@ $("projNew").addEventListener("click", async () => {
     await loadProjects();
     saveSettings();
     reloadHistory();
-    setStatus("ok", "已创建项目「" + name + "」：之后的生图会归档到该项目并沿用其风格设定");
+    setStatus("ok", "stProjCreated", { name });
   } catch (err) {
-    setStatus("err", "创建项目失败：" + err.message);
+    setStatus("err", "stProjCreateFail", { msg: err.message });
   }
 });
 $("projRen").addEventListener("click", async () => {
   const p = projActive();
-  if (!p) return setStatus("err", "先在「项目」下拉里选中要重命名的项目");
-  const name = (window.prompt("新的项目名称：", p.name) || "").trim();
+  if (!p) return setStatus("err", "stPickProjToRename");
+  const name = (window.prompt(tr("promptRenameProj"), p.name) || "").trim();
   if (!name || name === p.name) return;
   try {
     const r = await fetch("/api/projects/rename", { method: "POST",
@@ -1062,9 +1681,9 @@ $("projRen").addEventListener("click", async () => {
     await loadProjects();
     saveSettings();
     reloadHistory();
-    setStatus("ok", "项目已重命名为「" + name + "」（目录与已归档图片同步迁移）");
+    setStatus("ok", "stProjRenamed", { name });
   } catch (err) {
-    setStatus("err", "重命名失败：" + err.message);
+    setStatus("err", "stProjRenameFail", { msg: err.message });
   }
 });
 let projSaveT = null;
@@ -1142,8 +1761,7 @@ $("cfgExport").addEventListener("click", () => {
   const t = new Date(), z = n => String(n).padStart(2, "0");
   triggerDownload(URL.createObjectURL(blob),
     "sketch2asset_config_" + t.getFullYear() + z(t.getMonth() + 1) + z(t.getDate()) + ".json");
-  $("cfgStatus").textContent = "已导出 " + SET.profiles.length + " 个 API 方案、" +
-                               PROJECTS.length + " 个项目的风格设定。";
+  cfgStatus("cfgExported", { profiles: SET.profiles.length, projects: PROJECTS.length });
 });
 $("cfgImport").addEventListener("click", () => $("cfgFile").click());
 $("cfgFile").addEventListener("change", async e => {
@@ -1152,7 +1770,7 @@ $("cfgFile").addEventListener("change", async e => {
   if (!f) return;
   try {
     const data = JSON.parse(await f.text());
-    if (data.app !== "sketch2asset") throw new Error("不是本工具导出的配置文件");
+    if (data.app !== "sketch2asset") throw new Error(tr("cfgNotOurFile"));
     const pm = mergeProfiles(SET.profiles, data.profiles);
     SET.profiles.push(...pm.added);
     saveSettings();
@@ -1170,13 +1788,13 @@ $("cfgFile").addEventListener("change", async e => {
     }
     await loadProjects();
     reloadHistory();
-    $("cfgStatus").textContent =
-      "导入完成：\nAPI 方案 — 新增 " + pm.report.add + "（其中改名 " + pm.report.ren +
-      "），相同跳过 " + pm.report.skip +
-      "\n项目 — 新增 " + (jp.report.add - jFail) + "（其中改名 " + jp.report.ren +
-      "），相同跳过 " + jp.report.skip + (jFail ? "，失败 " + jFail : "");
+    cfgStatus("cfgImported", {
+      pAdd: pm.report.add, pRen: pm.report.ren, pSkip: pm.report.skip,
+      jAdd: jp.report.add - jFail, jRen: jp.report.ren, jSkip: jp.report.skip,
+      jFail: jFail ? { k: "cfgImportedFail", v: { n: jFail } } : null
+    });
   } catch (err) {
-    $("cfgStatus").textContent = "导入失败：" + err.message;
+    cfgStatus("cfgImportFail", { msg: err.message });
   }
 });
 function markActiveHistory(url){
@@ -1198,7 +1816,7 @@ async function refreshEngine(){
     for (const m of (ms.models || [])){
       const o = document.createElement("option");
       o.value = m.name;
-      o.textContent = m.name + (m.downloaded ? "" : (currentLang === "en" ? " (Not Downloaded)" : "（未下载·选中即下载）"));
+      o.textContent = m.name + (m.downloaded ? "" : tr("engineNotDownloaded"));
       o.title = m.desc || "";
       if (m.active) o.selected = true;
       sel.appendChild(o);
@@ -1206,17 +1824,17 @@ async function refreshEngine(){
     const prov = mattingProvider
       ? (mattingProvider.startsWith("Dml") ? "GPU·DirectML"
        : mattingProvider.startsWith("CUDA") ? "GPU·CUDA" : "CPU")
-      : (currentLang === "en" ? "Pending First Run" : "待首次运行");
+      : tr("enginePending");
     clearTimeout(enginePoll);
     if (ms.downloading){
       sel.disabled = true;
-      $("engineInfo").textContent = (currentLang === "en" ? "⬇ Downloading " : "⬇ 正在下载 ") + ms.downloading + "：" + (ms.progress || "");
+      $("engineInfo").textContent = tr("engineDownloading", { name: ms.downloading, progress: ms.progress || "" });
       enginePoll = setTimeout(refreshEngine, 2000);
     } else {
       sel.disabled = false;
       $("engineInfo").textContent = mattingAvail
-        ? ((currentLang === "en" ? "Engine Ready · " : "引擎就绪 · ") + prov + (ms.error ? " · ⚠ " + ms.error : ""))
-        : (currentLang === "en" ? "AI Matting missing. Run 'python setup_matting.py'" : "AI 未安装：命令行运行 python setup_matting.py");
+        ? tr("engineReady", { provider: prov, err: ms.error ? { k: "engineReadyErr", v: { msg: ms.error } } : null })
+        : tr("engineMissing");
     }
   } catch (e) {}
 }
@@ -1228,11 +1846,10 @@ $("modelSel").addEventListener("change", async () => {
       body: JSON.stringify({ model: $("modelSel").value }) });
     const d = await r.json();
     if (d.error) throw new Error(d.error);
-    edMsg(d.downloading
-      ? "开始后台下载 " + d.downloading + "，完成后自动启用（进度见下方状态）"
-      : "已切换模型，下次抠图生效（首次会重新加载模型）");
+    if (d.downloading) edMsg("edDownloadStarted", { name: d.downloading });
+    else edMsg("edModelSwitched");
   } catch (err) {
-    edMsg("切换模型失败：" + err.message);
+    edMsg("edModelSwitchFail", { msg: err.message });
   }
   refreshEngine();
 });
@@ -1243,9 +1860,9 @@ $("devSel").addEventListener("change", async () => {
       body: JSON.stringify({ device: $("devSel").value }) });
     const d = await r.json();
     if (d.error) throw new Error(d.error);
-    edMsg("设备已切换为 " + $("devSel").value + "，下次抠图生效");
+    edMsg("edDeviceSwitched", { dev: $("devSel").value });
   } catch (err) {
-    edMsg("切换设备失败：" + err.message);
+    edMsg("edDeviceSwitchFail", { msg: err.message });
   }
   refreshEngine();
 });
@@ -1462,7 +2079,6 @@ const edvp = $("edViewport");
 let edSource = null;       // 当前编辑图的原图 dataURL（工作台内抠图以它为输入）
 let edSourceUrl = null;    // 若图来自图库, 记录其 /outputs/ 路径（用于「移入项目」）
 
-function edMsg(t){ $("edStatus").textContent = t || ""; }
 function syncTabs(v){
   document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.view === v));
 }
@@ -1476,7 +2092,7 @@ function openView(v){
     refreshEngine();
     if (procCanvas && !procCanvas.parentNode) edvp.insertBefore(procCanvas, $("edMarquee"));
     if (procCanvas) requestAnimationFrame(() => { edFit(); edSyncDims(); });
-    else edMsg("从下方图库选一张图开始，或「📂 导入本地图片」");
+    else edMsg("initialEdStatus");
   }
 }
 function edRefreshData(){ procData = procCtx.getImageData(0, 0, procCanvas.width, procCanvas.height); }
@@ -1521,7 +2137,7 @@ function edPushUndo(){
 }
 function edUndoFn(){
   const s = ED.undo.pop();
-  if (!s) return setStatus("info", "没有可撤销的操作了（最多保留最近 6 步）");
+  if (!s) return setStatus("info", "stNoUndo");
   procCanvas.width = s.w; procCanvas.height = s.h;
   procCtx.putImageData(new ImageData(new Uint8ClampedArray(s.proc), s.w, s.h), 0, 0);
   origCanvas.width = s.w; origCanvas.height = s.h;
@@ -1598,20 +2214,20 @@ $("edApplyCrop").addEventListener("click", () => {
   let y = Math.max(0, Math.round(Math.min(s.y0, s.y1)));
   let w2 = Math.min(Math.round(Math.abs(s.x1 - s.x0)), procCanvas.width - x);
   let h2 = Math.min(Math.round(Math.abs(s.y1 - s.y0)), procCanvas.height - y);
-  if (w2 < 4 || h2 < 4) return setStatus("info", "选区太小");
+  if (w2 < 4 || h2 < 4) return setStatus("info", "stSelTooSmall");
   edCropTo(x, y, w2, h2);
-  setStatus("ok", "已裁剪为 " + w2 + "×" + h2);
+  setStatus("ok", "stCropped", { w: w2, h: h2 });
 });
 $("edTrim").addEventListener("click", () => {
   edRefreshData();
   const b = alphaBBox(procData.data, procCanvas.width, procCanvas.height, 8);
-  if (!b) return setStatus("info", "图里没有不透明内容");
+  if (!b) return setStatus("info", "stNoOpaque");
   const pad = 4;
   const x = Math.max(0, b[0] - pad), y = Math.max(0, b[1] - pad);
   const x2 = Math.min(procCanvas.width, b[0] + b[2] + pad);
   const y2 = Math.min(procCanvas.height, b[1] + b[3] + pad);
   edCropTo(x, y, x2 - x, y2 - y);
-  setStatus("ok", "已裁掉透明边，当前 " + (x2 - x) + "×" + (y2 - y));
+  setStatus("ok", "stTrimmed", { w: x2 - x, h: y2 - y });
 });
 
 edvp.addEventListener("contextmenu", e => e.preventDefault());
@@ -1637,9 +2253,9 @@ edvp.addEventListener("pointerdown", e => {
                        Math.floor(x), Math.floor(y), +$("edTol").value, ED.tool);
     if (n) procCtx.putImageData(procData, 0, 0);
     else ED.undo.pop();
-    setStatus(n ? "ok" : "info", n
-      ? (ED.tool === "restore" ? "已恢复 " : "已擦除 ") + n + " 像素（↩ 可撤销）"
-      : (ED.tool === "restore" ? "点击处不是透明区域" : "点击处已是透明"));
+    const restoring = ED.tool === "restore";
+    if (n) setStatus("ok", restoring ? "stRestored" : "stErased", { n });
+    else setStatus("info", restoring ? "stNotTransparent" : "stAlreadyTransparent");
   } else if (ED.tool === "brushR" || ED.tool === "brushE"){
     edPushUndo();
     ED.drag = { mode: "brush", lx: x, ly: y, restore: ED.tool === "brushR" };
@@ -1708,7 +2324,7 @@ async function edLoadFromDataUrl(durl){
   edShowMarquee();
   edSyncDims();
   if ($("editor").classList.contains("open")) edFit();
-  edMsg("已载入 " + pcv.width + "×" + pcv.height + "，可「✨ AI 抠图」或直接修补/裁剪/导出");
+  edMsg("edLoaded", { w: pcv.width, h: pcv.height });
 }
 async function loadGallery(){
   try {
@@ -1726,26 +2342,99 @@ async function loadGallery(){
       });
       box.appendChild(im);
     }
-    if (!(d.items || []).length && !procCanvas) edMsg("该筛选下没有图片：先去「🎨 生图」，或「📂 导入本地图片」");
+    if (!(d.items || []).length && !procCanvas) edMsg("edNoImages");
   } catch (e) {}
 }
+/* ---- 批量导入与拖放处理 ---- */
+async function handleImportFiles(files){
+  if (!files || !files.length) return;
+  const targetProject = $("edProjSel").value === "_all" ? "" : $("edProjSel").value;
+  let firstDataUrl = null;
+  let savedCount = 0;
+
+  for (let i = 0; i < files.length; i++){
+    const file = files[i];
+    const durl = await new Promise((resolve, reject) => {
+      const rd = new FileReader();
+      rd.onload = () => resolve(rd.result);
+      rd.onerror = reject;
+      rd.readAsDataURL(file);
+    });
+    if (i === 0) firstDataUrl = durl;
+    try {
+      const r = await fetch("/api/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: durl, project: targetProject })
+      });
+      const d = await r.json();
+      if (!d.error) savedCount++;
+    } catch(err){}
+  }
+
+  if (firstDataUrl) {
+    edSourceUrl = null;
+    await edLoadFromDataUrl(firstDataUrl);
+  }
+  await loadGallery();
+  await loadProjects();
+  if (files.length > 1) {
+    edMsg("edBatchImportOk", { count: files.length });
+  } else {
+    edMsg("edLoaded", { w: procCanvas ? procCanvas.width : 0, h: procCanvas ? procCanvas.height : 0 });
+  }
+}
+
 $("edImport").addEventListener("click", () => $("edFile").click());
-$("edFile").addEventListener("change", e => {
-  const f = e.target.files[0];
-  if (!f) return;
-  const rd = new FileReader();
-  rd.onload = () => { edSourceUrl = null; edLoadFromDataUrl(rd.result); };
-  rd.readAsDataURL(f);
+$("edFile").addEventListener("change", async e => {
+  const files = [...(e.target.files || [])];
+  if (!files.length) return;
+  await handleImportFiles(files);
   e.target.value = "";
 });
+
+/* ---- 工作台视口拖放图片交互 ---- */
+const edDropOverlay = $("edDropOverlay");
+let edDragDepth = 0;
+edvp.addEventListener("dragenter", e => {
+  e.preventDefault(); e.stopPropagation();
+  edDragDepth++;
+  if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files")) {
+    if (edDropOverlay) edDropOverlay.style.display = "flex";
+  }
+});
+edvp.addEventListener("dragover", e => {
+  e.preventDefault(); e.stopPropagation();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  if (edDropOverlay) edDropOverlay.style.display = "flex";
+});
+edvp.addEventListener("dragleave", e => {
+  e.preventDefault(); e.stopPropagation();
+  edDragDepth--;
+  if (edDragDepth <= 0) {
+    edDragDepth = 0;
+    if (edDropOverlay) edDropOverlay.style.display = "none";
+  }
+});
+edvp.addEventListener("drop", async e => {
+  e.preventDefault(); e.stopPropagation();
+  edDragDepth = 0;
+  if (edDropOverlay) edDropOverlay.style.display = "none";
+  const files = [...(e.dataTransfer.files || [])].filter(f =>
+    f.type.startsWith("image/") || /\.(png|jpe?g|webp|bmp|gif)$/i.test(f.name)
+  );
+  if (!files.length) return;
+  await handleImportFiles(files);
+});
+
 $("edRefreshGal").addEventListener("click", loadGallery);
 $("edProjSel").addEventListener("change", loadGallery);
 $("edAssign").addEventListener("click", async () => {
   if (!edSourceUrl)
-    return edMsg("只有从图库载入的图才能移动；导入的本地图请用「💾 保存到图库」存入目标项目");
+    return edMsg("edOnlyGalleryMovable");
   const target = $("edProjSel").value;
   if (target === "_all")
-    return edMsg("请先在「项目」筛选里选中目标项目（或「未分类」），再点移入");
+    return edMsg("edPickTargetProj");
   try {
     const r = await fetch("/api/projects/assign", { method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1753,19 +2442,340 @@ $("edAssign").addEventListener("click", async () => {
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     edSourceUrl = d.url;
-    edMsg("已移入「" + (target || "未分类") + "」");
+    // 目标是"未分类"时用当前语言的词, 是具体项目时用项目名(用户数据, 不翻译)
+    edMsg("edMovedTo", { proj: target || { k: "optUncat" } });
     loadGallery();
     loadProjects();
   } catch (err) {
-    edMsg("移动失败：" + err.message);
+    edMsg("edMoveFail", { msg: err.message });
   }
+});
+
+/* ================= AI 像素图网格纯化与色块量化修复引擎 (Pixel Art Cleaner) ================= */
+
+// PICO-8 官方 16 色调色板
+const PALETTE_PICO8 = [
+  [0, 0, 0],       [29, 43, 83],    [126, 37, 83],   [0, 135, 81],
+  [171, 82, 54],   [95, 87, 79],    [194, 195, 199], [255, 241, 232],
+  [255, 0, 77],    [255, 163, 0],   [255, 236, 39],  [0, 228, 54],
+  [41, 173, 255],  [131, 118, 156], [255, 119, 168], [255, 204, 170]
+];
+
+// Game Boy 经典 4 色调色板
+const PALETTE_GAMEBOY = [
+  [15, 56, 15], [48, 98, 48], [139, 172, 15], [155, 188, 15]
+];
+
+function colorDistSq(r1, g1, b1, r2, g2, b2){
+  const rmean = (r1 + r2) / 2;
+  const dr = r1 - r2, dg = g1 - g2, db = b1 - b2;
+  return (((512 + rmean) * dr * dr) >> 8) + 4 * dg * dg + (((767 - rmean) * db * db) >> 8);
+}
+
+function detectPixelBlockSize(imgData, w, h){
+  const candidates = [4, 6, 8, 10, 12, 14, 16, 20, 24, 32, 48, 64];
+  const d = imgData.data;
+  let bestSize = 8;
+  let minVar = Infinity;
+
+  const startX = Math.floor(w * 0.1), endX = Math.floor(w * 0.9);
+  const startY = Math.floor(h * 0.1), endY = Math.floor(h * 0.9);
+
+  for (const s of candidates){
+    if (s * 4 > w || s * 4 > h) continue;
+    let totalVar = 0, sampleCount = 0;
+
+    for (let y = startY; y < endY - s; y += s * 2){
+      for (let x = startX; x < endX - s; x += s * 2){
+        let sumR = 0, sumG = 0, sumB = 0, n = 0;
+        for (let dy = 0; dy < s; dy++){
+          for (let dx = 0; dx < s; dx++){
+            const idx = ((y + dy) * w + (x + dx)) * 4;
+            if (d[idx + 3] < 32) continue;
+            sumR += d[idx]; sumG += d[idx + 1]; sumB += d[idx + 2];
+            n++;
+          }
+        }
+        if (n < (s * s) * 0.5) continue;
+        const avgR = sumR / n, avgG = sumG / n, avgB = sumB / n;
+        let cellVar = 0;
+        for (let dy = 0; dy < s; dy++){
+          for (let dx = 0; dx < s; dx++){
+            const idx = ((y + dy) * w + (x + dx)) * 4;
+            if (d[idx + 3] < 32) continue;
+            const dr = d[idx] - avgR, dg = d[idx + 1] - avgG, db = d[idx + 2] - avgB;
+            cellVar += dr * dr + dg * dg + db * db;
+          }
+        }
+        totalVar += cellVar / n;
+        sampleCount++;
+      }
+    }
+    if (sampleCount > 0){
+      const avgCellVar = totalVar / sampleCount;
+      if (avgCellVar < minVar){
+        minVar = avgCellVar;
+        bestSize = s;
+      }
+    }
+  }
+  return bestSize;
+}
+
+function quantizePalette(colors, k){
+  if (!colors.length || colors.length <= k) return colors;
+  const centroids = [];
+  centroids.push(colors[0]);
+  while (centroids.length < k){
+    let maxDist = -1, bestCandidate = colors[0];
+    for (const c of colors){
+      let minD = Infinity;
+      for (const ct of centroids){
+        const d = colorDistSq(c[0], c[1], c[2], ct[0], ct[1], ct[2]);
+        if (d < minD) minD = d;
+      }
+      if (minD > maxDist){
+        maxDist = minD;
+        bestCandidate = c;
+      }
+    }
+    centroids.push(bestCandidate);
+  }
+
+  for (let iter = 0; iter < 4; iter++){
+    const clusters = Array.from({ length: centroids.length }, () => ({ r: 0, g: 0, b: 0, count: 0 }));
+    for (const c of colors){
+      let bestIdx = 0, minDist = Infinity;
+      for (let i = 0; i < centroids.length; i++){
+        const d = colorDistSq(c[0], c[1], c[2], centroids[i][0], centroids[i][1], centroids[i][2]);
+        if (d < minDist){ minDist = d; bestIdx = i; }
+      }
+      clusters[bestIdx].r += c[0];
+      clusters[bestIdx].g += c[1];
+      clusters[bestIdx].b += c[2];
+      clusters[bestIdx].count++;
+    }
+    for (let i = 0; i < centroids.length; i++){
+      if (clusters[i].count > 0){
+        centroids[i] = [
+          Math.round(clusters[i].r / clusters[i].count),
+          Math.round(clusters[i].g / clusters[i].count),
+          Math.round(clusters[i].b / clusters[i].count)
+        ];
+      }
+    }
+  }
+  return centroids;
+}
+
+function cleanPixelArtCanvas(sourceCanvas, opts = {}){
+  const {
+    grid = "auto",
+    palette = "auto",
+    hardAlpha = true,
+    denoise = true
+  } = opts;
+
+  const w = sourceCanvas.width, h = sourceCanvas.height;
+  const ctx = sourceCanvas.getContext("2d", { willReadFrequently: true });
+  const srcData = ctx.getImageData(0, 0, w, h);
+  const src = srcData.data;
+
+  let gw = 64, gh = 64;
+  if (grid === "auto"){
+    const blockSize = detectPixelBlockSize(srcData, w, h);
+    gw = Math.max(16, Math.min(512, Math.round(w / blockSize)));
+    gh = Math.max(16, Math.min(512, Math.round(h / blockSize)));
+  } else if (grid.startsWith("cell")){
+    const cellSize = parseInt(grid.slice(4), 10) || 8;
+    gw = Math.max(8, Math.round(w / cellSize));
+    gh = Math.max(8, Math.round(h / cellSize));
+  } else {
+    const targetDim = parseInt(grid, 10) || 64;
+    gw = targetDim;
+    gh = Math.max(1, Math.round(targetDim * (h / w)));
+  }
+
+  const stepX = w / gw;
+  const stepY = h / gh;
+  const gridCells = Array.from({ length: gh }, () => new Array(gw));
+  const sampledColors = [];
+
+  for (let gy = 0; gy < gh; gy++){
+    const y0 = Math.floor(gy * stepY), y1 = Math.min(h, Math.floor((gy + 1) * stepY));
+    for (let gx = 0; gx < gw; gx++){
+      const x0 = Math.floor(gx * stepX), x1 = Math.min(w, Math.floor((gx + 1) * stepX));
+      let opaqueCount = 0, totalCount = 0;
+      const colorBins = new Map();
+
+      for (let py = y0; py < y1; py++){
+        for (let px = x0; px < x1; px++){
+          totalCount++;
+          const idx = (py * w + px) * 4;
+          const a = src[idx + 3];
+          if (a < (hardAlpha ? 128 : 32)) continue;
+          opaqueCount++;
+          const r = src[idx], g = src[idx + 1], b = src[idx + 2];
+          const binKey = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+          const bin = colorBins.get(binKey) || { count: 0, sumR: 0, sumG: 0, sumB: 0 };
+          bin.count++;
+          bin.sumR += r; bin.sumG += g; bin.sumB += b;
+          colorBins.set(binKey, bin);
+        }
+      }
+
+      if (hardAlpha && (opaqueCount < totalCount * 0.35 || opaqueCount === 0)){
+        gridCells[gy][gx] = [0, 0, 0, 0];
+      } else if (!opaqueCount){
+        gridCells[gy][gx] = [0, 0, 0, 0];
+      } else {
+        let maxCount = -1, bestBin = null;
+        for (const bin of colorBins.values()){
+          if (bin.count > maxCount){
+            maxCount = bin.count;
+            bestBin = bin;
+          }
+        }
+        const cellR = Math.round(bestBin.sumR / bestBin.count);
+        const cellG = Math.round(bestBin.sumG / bestBin.count);
+        const cellB = Math.round(bestBin.sumB / bestBin.count);
+        gridCells[gy][gx] = [cellR, cellG, cellB, 255];
+        sampledColors.push([cellR, cellG, cellB]);
+      }
+    }
+  }
+
+  let activePalette = null;
+  if (palette === "pico8"){
+    activePalette = PALETTE_PICO8;
+  } else if (palette === "gameboy"){
+    activePalette = PALETTE_GAMEBOY;
+  } else if (["16", "32", "64"].includes(palette)){
+    const k = parseInt(palette, 10);
+    activePalette = quantizePalette(sampledColors, k);
+  }
+
+  if (activePalette && activePalette.length){
+    for (let gy = 0; gy < gh; gy++){
+      for (let gx = 0; gx < gw; gx++){
+        const c = gridCells[gy][gx];
+        if (c[3] === 0) continue;
+        let minDist = Infinity, bestColor = activePalette[0];
+        for (const p of activePalette){
+          const d = colorDistSq(c[0], c[1], c[2], p[0], p[1], p[2]);
+          if (d < minDist){ minDist = d; bestColor = p; }
+        }
+        gridCells[gy][gx] = [bestColor[0], bestColor[1], bestColor[2], 255];
+      }
+    }
+  }
+
+  if (denoise){
+    for (let gy = 1; gy < gh - 1; gy++){
+      for (let gx = 1; gx < gw - 1; gx++){
+        const c = gridCells[gy][gx];
+        if (c[3] === 0) continue;
+        const up = gridCells[gy - 1][gx], down = gridCells[gy + 1][gx];
+        const left = gridCells[gy][gx - 1], right = gridCells[gy][gx + 1];
+        if (up[3] && down[3] && left[3] && right[3]){
+          if (up[0] === down[0] && up[1] === down[1] && up[2] === down[2] &&
+              up[0] === left[0] && up[1] === left[1] && up[2] === left[2] &&
+              up[0] === right[0] && up[1] === right[1] && up[2] === right[2]){
+            gridCells[gy][gx] = [up[0], up[1], up[2], 255];
+          }
+        }
+      }
+    }
+  }
+
+  const fullCanvas = document.createElement("canvas");
+  fullCanvas.width = w; fullCanvas.height = h;
+  const fctx = fullCanvas.getContext("2d");
+  const fullImgData = fctx.createImageData(w, h);
+  const out = fullImgData.data;
+
+  for (let gy = 0; gy < gh; gy++){
+    const y0 = Math.floor(gy * stepY), y1 = Math.min(h, Math.floor((gy + 1) * stepY));
+    for (let gx = 0; gx < gw; gx++){
+      const x0 = Math.floor(gx * stepX), x1 = Math.min(w, Math.floor((gx + 1) * stepX));
+      const [cr, cg, cb, ca] = gridCells[gy][gx];
+      for (let py = y0; py < y1; py++){
+        for (let px = x0; px < x1; px++){
+          const idx = (py * w + px) * 4;
+          out[idx] = cr;
+          out[idx + 1] = cg;
+          out[idx + 2] = cb;
+          out[idx + 3] = ca;
+        }
+      }
+    }
+  }
+  fctx.putImageData(fullImgData, 0, 0);
+
+  const nativeCanvas = document.createElement("canvas");
+  nativeCanvas.width = gw; nativeCanvas.height = gh;
+  const nctx = nativeCanvas.getContext("2d");
+  const nativeImgData = nctx.createImageData(gw, gh);
+  const nout = nativeImgData.data;
+  const uniqueColorMap = new Set();
+
+  for (let gy = 0; gy < gh; gy++){
+    for (let gx = 0; gx < gw; gx++){
+      const [cr, cg, cb, ca] = gridCells[gy][gx];
+      const idx = (gy * gw + gx) * 4;
+      nout[idx] = cr;
+      nout[idx + 1] = cg;
+      nout[idx + 2] = cb;
+      nout[idx + 3] = ca;
+      if (ca > 0) uniqueColorMap.add(`${cr},${cg},${cb}`);
+    }
+  }
+  nctx.putImageData(nativeImgData, 0, 0);
+
+  return {
+    canvas: fullCanvas,
+    nativeCanvas: nativeCanvas,
+    gw,
+    gh,
+    colorCount: uniqueColorMap.size
+  };
+}
+
+/* ---- 工作台：一键纯化与原生像素图导出 ---- */
+$("btnPixelClean").addEventListener("click", () => {
+  if (!procCanvas) return edMsg("edNeedImage");
+  edPushUndo();
+  const res = cleanPixelArtCanvas(procCanvas, {
+    grid: $("edPixelGrid").value,
+    palette: $("edPixelPalette").value,
+    hardAlpha: $("edPixelHardAlpha").checked,
+    denoise: true
+  });
+  procCtx.drawImage(res.canvas, 0, 0);
+  origCanvas.getContext("2d").drawImage(res.canvas, 0, 0);
+  origFix = origCanvas.getContext("2d").getImageData(0, 0, origCanvas.width, origCanvas.height);
+  edRefreshData();
+  edSyncDims();
+  edMsg("edPixelCleaned", { grid: `${res.gw}×${res.gh}`, colors: res.colorCount });
+});
+
+$("btnPixelNativeExport").addEventListener("click", () => {
+  if (!procCanvas) return edMsg("edNeedImage");
+  const res = cleanPixelArtCanvas(procCanvas, {
+    grid: $("edPixelGrid").value,
+    palette: $("edPixelPalette").value,
+    hardAlpha: $("edPixelHardAlpha").checked,
+    denoise: true
+  });
+  downloadCanvas(res.nativeCanvas, fileName("_pixel_" + res.gw + "x" + res.gh));
+  edMsg("edExported", { w: res.gw, h: res.gh });
 });
 
 /* ---- 编辑器内 AI 抠图（始终以原图为输入） ---- */
 $("edMatting").addEventListener("click", async () => {
-  if (!edSource || !procCanvas) return edMsg("请先从图库选择或导入一张图");
+  if (!edSource || !procCanvas) return edMsg("edNeedImage");
   edPushUndo();
-  edMsg("AI 抠图处理中…（首次调用需加载模型）");
+  edMsg("edMattingRunning");
   try {
     let resUrl;
     if (mattingAvail){
@@ -1793,10 +2803,10 @@ $("edMatting").addEventListener("click", async () => {
     edFit();
     edSyncDims();
     refreshEngine();
-    edMsg("抠图完成。可用修补工具微调，然后导出 / 保存到图库");
+    edMsg("edMattingDone");
   } catch (err) {
     ED.undo.pop();
-    edMsg("抠图失败：" + err.message);
+    edMsg("edMattingFail", { msg: err.message });
   }
 });
 
@@ -1809,7 +2819,7 @@ function edSyncDims(){
 $("edExport").addEventListener("click", () => {
   if (!procCanvas) return;
   let W = parseInt($("edW").value, 10) || 0, H = parseInt($("edH").value, 10) || 0;
-  if (W < 1 && H < 1) return edMsg("请填写导出宽或高（只填一个则按比例算另一个）");
+  if (W < 1 && H < 1) return edMsg("edNeedSize");
   const sw = procCanvas.width, sh = procCanvas.height;
   if (W < 1) W = Math.max(1, Math.round(sw * H / sh));
   if (H < 1) H = Math.max(1, Math.round(sh * W / sw));
@@ -1826,11 +2836,11 @@ $("edExport").addEventListener("click", () => {
     ctx.drawImage(procCanvas, 0, 0, W, H);
   }
   downloadCanvas(cv, fileName("_" + W + "x" + H));
-  edMsg("已导出 " + W + "×" + H + " PNG（保持比例时多余部分为透明）");
+  edMsg("edExported", { w: W, h: H });
 });
 $("edSave").addEventListener("click", async () => {
   if (!procCanvas) return;
-  edMsg("保存中…");
+  edMsg("edSaving");
   try {
     const r = await fetch("/api/save", { method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1839,11 +2849,11 @@ $("edSave").addEventListener("click", async () => {
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     edSourceUrl = d.saved || edSourceUrl;
-    edMsg("已保存到图库：" + decodeURIComponent(d.saved || "").split("/").slice(2).join(" / "));
+    edMsg("edSaved", { path: decodeURIComponent(d.saved || "").split("/").slice(2).join(" / ") });
     loadGallery();
     loadProjects();
   } catch (err) {
-    edMsg("保存失败：" + err.message);
+    edMsg("edSaveFail", { msg: err.message });
   }
 });
 $("edTol").addEventListener("input", () => $("edTolVal").textContent = $("edTol").value);
@@ -1874,102 +2884,45 @@ $("themeToggle")?.addEventListener("click", () => {
 const savedTheme = localStorage.getItem("s2a_theme") || "dark";
 applyTheme(savedTheme);
 
-/* ---- 全局双语言国际化 i18n 引擎 (ZH / EN) ---- */
-const I18N = {
-  zh: {
-    tabGen: "生图", tabEdit: "工作台", tabSettings: "设置",
-    sketchBase: "草图引导 (SKETCH BASE)", dropText: "点击选择图片或拖拽草图到此处", dropSub: "支持 PNG / JPG / WebP，自动轻量压缩", btnRemove: "移除",
-    promptTitle: "提示词 (PROMPT COMMAND)", promptPh: "例如：一把奇幻风格的火焰长剑，游戏道具图标，金色剑柄，华丽装饰... (Ctrl+Enter 快速生成)",
-    btnGenText: "生成资产图", placeholder: "生成资产图将在此展示", btnToEditor: "送入工作台", btnOrig: "下载原图",
-    apiSettings: "API 设置 (PROFILES)", profScheme: "配置方案", profNameLabel: "方案名称", btnDelete: "删除", apiType: "接口类型", optImages: "图像接口 /images", optChat: "对话接口 /chat", modelName: "模型名称", btnFetch: "拉取",
-    projLabel: "项目归档", optUncat: "未分类", optAll: "全部", projStyleLabel: "项目风格描述",
-    styleLabel: "美术风格", styleDefault: "默认（跟随提示词）", stylePixel: "像素风 Pixel Art", styleCartoon: "美式卡通 Cartoon", styleAnime: "二次元 Anime", styleLowpoly: "低多边形 Low Poly", styleRealistic: "写实 Realistic", styleWatercolor: "水彩手绘 Watercolor", styleCyberpunk: "赛博朋克 Cyberpunk", styleRender3d: "3D 渲染 3D Render",
-    sizeLabel: "分辨率", sizeAuto: "自动", size1536x1024: "1536 × 1024 横", size1024x1536: "1024 × 1536 竖", sizeCustom: "自定义…", sizeWLabel: "自定义宽", sizeHLabel: "自定义高",
-    bgLabel: "生成背景", bgWhite: "纯白（默认推荐）", bgGray: "中性灰", bgBlack: "纯黑", bgNone: "不指定", historyLabel: "历史图库",
-    // 设置页
-    cfgTitle: "导入 / 导出配置", cfgHint: "导出内容：API 配置方案与项目清单及其风格设定。<br>导入规则：只新增、绝不覆盖现有配置。", cfgExportText: "导出配置 JSON", cfgImportText: "导入配置 JSON",
-    // 工作台
-    edFit: "适配", edUndo: "撤销", edTrim: "裁透明边", edApplyCrop: "应用裁剪", autoPh: "自动",
-    inspectorTitle: "INSPECTOR 属性控制", mattingCardTitle: "AI 智能抠图引擎", edMattingText: "开始 AI 抠图",
-    modelLabel: "抠图模型", devLabel: "计算设备", devAuto: "自动", chokeLabel: "收边像素", enhLabel: "增强模式",
-    tolLabel: "色彩容差", brushLabel: "笔刷大小", exportCardTitle: "分辨率无损导出", widthLabel: "宽 (W)", heightLabel: "高 (H)", keepRatioLabel: "保持纵横比居中填充",
-    edExportText: "按分辨率导出 PNG", edSaveText: "存进图库", edDownloadText: "下载 PNG", edAssignText: "移入项目", edImportText: "导入本地图片",
-    initialEdStatus: "从下方图库单击一张图开始，或「导入本地图片」",
-    toolPan: "移动画布 (Space/中键拖拽)", toolRestore: "按颜色点选恢复", toolErase: "按颜色点选擦除",
-    toolBrushR: "笔刷自由涂抹恢复", toolBrushE: "笔刷自由涂抹擦除", toolCrop: "框选裁剪区域"
-  },
-  en: {
-    tabGen: "Generate", tabEdit: "Studio", tabSettings: "Settings",
-    sketchBase: "SKETCH BASE", dropText: "Click to select or drag sketch here", dropSub: "Supports PNG / JPG / WebP (auto compressed)", btnRemove: "Remove",
-    promptTitle: "PROMPT COMMAND", promptPh: "e.g. A fantasy flame sword, game item icon, golden hilt... (Ctrl+Enter)",
-    btnGenText: "Generate Asset", placeholder: "Generated asset will appear here", btnToEditor: "Send to Studio", btnOrig: "Download Raw",
-    apiSettings: "API PROFILES", profScheme: "Profiles", profNameLabel: "Profile Name", btnDelete: "Delete", apiType: "API Type", optImages: "Images Endpoint", optChat: "Chat Endpoint", modelName: "Model Name", btnFetch: "Fetch",
-    projLabel: "Project Hub", optUncat: "Uncategorized", optAll: "All Projects", projStyleLabel: "Project Style Prompt",
-    styleLabel: "Art Style", styleDefault: "Default (Follow Prompt)", stylePixel: "Pixel Art", styleCartoon: "Cartoon", styleAnime: "Anime", styleLowpoly: "Low Poly", styleRealistic: "Realistic", styleWatercolor: "Watercolor", styleCyberpunk: "Cyberpunk", styleRender3d: "3D Render",
-    sizeLabel: "Resolution", sizeAuto: "Auto", size1536x1024: "1536 × 1024 Land", size1024x1536: "1024 × 1536 Port", sizeCustom: "Custom…", sizeWLabel: "Custom Width", sizeHLabel: "Custom Height",
-    bgLabel: "Background", bgWhite: "Pure White (Recommended)", bgGray: "Studio Gray", bgBlack: "Pure Black", bgNone: "Unspecified", historyLabel: "History Wall",
-    // Settings
-    cfgTitle: "Import / Export Config", cfgHint: "Exports API profiles and projects with style prompts.<br>Import rule: Appends new entries only, never overwrites.", cfgExportText: "Export Config JSON", cfgImportText: "Import Config JSON",
-    // Studio
-    edFit: "Fit View", edUndo: "Undo", edTrim: "Trim Transparent", edApplyCrop: "Apply Crop", autoPh: "Auto",
-    inspectorTitle: "INSPECTOR CONTROLS", mattingCardTitle: "AI MATTING ENGINE", edMattingText: "Run AI Matting",
-    modelLabel: "Matting Model", devLabel: "Compute Device", devAuto: "Auto", chokeLabel: "Choke Border", enhLabel: "Enhance Mode",
-    tolLabel: "Color Tolerance", brushLabel: "Brush Size", exportCardTitle: "LOSSLESS EXPORT", widthLabel: "Width (W)", heightLabel: "Height (H)", keepRatioLabel: "Maintain Aspect Ratio",
-    edExportText: "Export Custom PNG", edSaveText: "Save to Gallery", edDownloadText: "Download PNG", edAssignText: "Move to Project", edImportText: "Import Local Image",
-    initialEdStatus: "Click an image below or 'Import Local Image'",
-    toolPan: "Move Canvas (Space/Middle Drag)", toolRestore: "Color Pick Restore", toolErase: "Color Pick Erase",
-    toolBrushR: "Brush Restore", toolBrushE: "Brush Erase", toolCrop: "Crop Region"
-  }
-};
+/* ---- i18n 应用层 (字典与 tr() 见文件顶部) ---- */
 
-let currentLang = localStorage.getItem("s2a_lang") || "zh";
+// 值里含 HTML 标签、必须用 innerHTML 注入的 key。内容全部来自本文件的字面量字典,
+// 不含任何用户输入, 因此不存在注入面。
+const I18N_HTML_KEYS = new Set(["cfgHint"]);
 
 function applyLanguage(lang) {
-  currentLang = lang;
-  localStorage.setItem("s2a_lang", lang);
-  const dict = I18N[lang] || I18N.zh;
-  
-  const btn = $("langToggle");
-  if (btn) btn.textContent = lang === "zh" ? "EN" : "中";
+  currentLang = I18N[lang] ? lang : "zh";
+  localStorage.setItem("s2a_lang", currentLang);
 
-  // 全量替代 data-i18n 元素
+  const btn = $("langToggle");
+  if (btn) btn.textContent = currentLang === "zh" ? "EN" : "中";
+  document.documentElement.lang = tr("htmlLang");
+  document.title = tr("docTitle");
+
+  // 静态文本节点: 保留元素里原有的 <i data-lucide> 图标
   document.querySelectorAll("[data-i18n]").forEach(el => {
     const key = el.getAttribute("data-i18n");
-    if (!dict[key]) return;
-
     const icon = el.querySelector("i[data-lucide]");
-    if (icon) {
-      const iconHTML = icon.outerHTML;
-      el.innerHTML = iconHTML + " " + dict[key];
-    } else {
-      el.textContent = dict[key];
-    }
+    if (icon) el.innerHTML = icon.outerHTML + " " + tr(key);
+    else if (I18N_HTML_KEYS.has(key)) el.innerHTML = tr(key);
+    else el.textContent = tr(key);
   });
-
-  // 全量替代 data-i18n-opt 元素
   document.querySelectorAll("[data-i18n-opt]").forEach(opt => {
-    const key = opt.getAttribute("data-i18n-opt");
-    if (dict[key]) opt.textContent = dict[key];
+    opt.textContent = tr(opt.getAttribute("data-i18n-opt"));
   });
-
-  // 全量替代 data-i18n-ph (placeholder) 元素
   document.querySelectorAll("[data-i18n-ph]").forEach(input => {
-    const key = input.getAttribute("data-i18n-ph");
-    if (dict[key]) input.placeholder = dict[key];
+    input.placeholder = tr(input.getAttribute("data-i18n-ph"));
   });
-
-  // 全量替代 data-i18n-title (tooltip) 元素
   document.querySelectorAll("[data-i18n-title]").forEach(el => {
-    const key = el.getAttribute("data-i18n-title");
-    if (dict[key]) el.title = dict[key];
+    el.title = tr(el.getAttribute("data-i18n-title"));
   });
 
-  if ($("edStatus") && (!$("edStatus").textContent || $("edStatus").textContent.includes("从下方图库") || $("edStatus").textContent.includes("Click an image"))) {
-    $("edStatus").textContent = dict.initialEdStatus;
-  }
-
-  if (typeof refreshEngine === "function") refreshEngine();
-  if (typeof loadProjects === "function") loadProjects();
+  // 动态内容: 用记下的 key 重新渲染, 不做字符串嗅探
+  retranslateDynamic();
+  rebuildProjectSelects();   // 用缓存重建, 不重新请求服务端
+  renderChips();
+  refreshEngine();
+  renderModelDropdownItems($("modelSearchInput") ? $("modelSearchInput").value : "");
   if (window.lucide) lucide.createIcons();
 }
 

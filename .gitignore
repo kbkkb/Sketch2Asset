@@ -12,9 +12,17 @@ outputs/
 # Local Runtime Logs & Auto Configs
 matting_worker.log
 matting_config.json
+config.json
+*.config.json
 
 # Environment / OS Files
 .DS_Store
 Thumbs.db
 *.swp
 *.tmp
+/.trellis
+/.agent
+/.claude
+/.cursor
+/.gitattributes
+/AGENTS.md

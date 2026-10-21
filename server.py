@@ -651,6 +651,17 @@ class Handler(BaseHTTPRequestHandler):
             items.sort(reverse=True)
             self._send_json({"items": [u for _, u in items[:60]]})
             return
+        if path == "/api/settings":
+            cfg_file = os.path.join(ROOT, "config.json")
+            if os.path.isfile(cfg_file):
+                try:
+                    with open(cfg_file, encoding="utf-8") as f:
+                        self._send_json({"settings": json.load(f)})
+                        return
+                except Exception:
+                    pass
+            self._send_json({"settings": None})
+            return
         if path == "/":
             path = "/index.html"
         fp = os.path.normpath(os.path.join(ROOT, path.lstrip("/")))
@@ -673,7 +684,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path not in ("/api/generate", "/api/models", "/api/matting", "/api/save",
                         "/api/matting/device", "/api/matting/model",
-                        "/api/projects", "/api/projects/assign", "/api/projects/rename"):
+                        "/api/projects", "/api/projects/assign", "/api/projects/rename",
+                        "/api/settings"):
             self._send_json({"error": "not found"}, 404)
             return
         try:
@@ -769,6 +781,14 @@ class Handler(BaseHTTPRequestHandler):
                     os.replace(src, dst)
                 self._send_json({"url": "/outputs/" + ((proj + "/") if proj else "")
                                         + os.path.basename(src)})
+            elif path == "/api/settings":
+                cfg_file = os.path.join(ROOT, "config.json")
+                try:
+                    with open(cfg_file, "w", encoding="utf-8") as f:
+                        json.dump(payload, f, ensure_ascii=False, indent=2)
+                    self._send_json({"ok": True})
+                except Exception as e:
+                    raise AppError("无法保存配置到本地文件: %s" % e)
             else:
                 project = safe_project(payload.get("project"))   # 先校验, 避免白花生成费
                 image, via = do_generate(payload)

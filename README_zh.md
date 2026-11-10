@@ -20,11 +20,11 @@
 
 ---
 
-## 为什么选择 Sketch2Asset 2.0？
+## 为什么选择 Sketch2Asset v0.2.0？
 
 通用 AI 生图工具在面对实际游戏开发管线时，往往卡在**“最后 1 公里”**：生成的像素图带有扩散抗锯齿杂色与大小不一的“伪像素（Mixels）”、角色挥刀序列帧跨过网格线被拦腰截断、透明 PNG 导入 Unity/Unreal/Godot 后边缘泛起一圈白边、同项目多批次资产画风前后割裂。
 
-**Sketch2Asset 2.0** 采用 **Tauri 2 + Rust + Svelte 5** 纯原生桌面架构彻底重写，零 Python 环境依赖，将生图、角色派生、序列帧校准与像素级后处理整合在三大专业工作台中，直接产出可拖入游戏引擎使用的生产级（Game-Ready）资产。
+**Sketch2Asset v0.2.0** 采用 **Tauri 2 + Rust + Svelte 5** 纯原生桌面架构彻底重写，零 Python 环境依赖，将生图、角色派生、序列帧校准与像素级后处理整合在三大专业工作台中，直接产出可拖入游戏引擎使用的生产级（Game-Ready）资产。
 
 ---
 
@@ -132,8 +132,10 @@
     - `data/library.db`：SQLite 3（WAL 模式）资产与项目元数据索引库
     - `outputs/`：所有用户项目文件夹与生成的原图/精修图
     - `models/`：在线下载的 ONNX 抠图模型权重文件
-- **自包含免安装运行环境**：
-  - 内置 `SetDllDirectoryW` 动态库加载隔离与全套现代 MSVC 14.50 / DirectML 运行时库，无论目标电脑系统环境多旧，解压或安装后均可直接启动使用，彻底杜绝 `LoadLibraryExW failed (1114)` 等环境报错。
+- **自包含免安装运行环境与双保险 DLL 预载**：
+  - 针对 Windows 系统自带老旧 VC++ 运行时（如 2019 年 14.22）与 WebView2 严苛隔离模式（`0x800`），采用 `preload_startup_runtime_dlls()` 在程序启动第 1 毫秒显式绑定现代 MSVC 14.50 CRT 与 DirectML 运行库，配合 `SetDefaultDllDirectories(0x1000)` + `AddDllDirectory` + `LOAD_WITH_ALTERED_SEARCH_PATH`，彻底杜绝 `LoadLibraryExW failed (1114)` 等加载故障。
+- **内置一键检查更新**：
+  - 设置面板内置「关于与检查更新」卡片，直连 GitHub Releases API 实时比对最新版本，提供一键跳转下载最新安装包与绿色包。
 
 ---
 
@@ -197,6 +199,12 @@ sketch2asset/
 ├── package.json
 └── vite.config.ts
 ```
+
+---
+
+## 鸣谢
+
+特别鸣谢 **[LINUX DO](https://linux.do/)** 社区以及所有在开发、重构、模型测试与游戏管线调优过程中提供灵感、技术讨论与无私支持的伙伴们！
 
 ---
 

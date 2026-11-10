@@ -62,6 +62,7 @@ fn save_window_bounds(window: &tauri::Window, path: &Path) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    matting::preload_startup_runtime_dlls();
     tauri::Builder::default()
         .setup(|app| {
             let app_data_dir = app
@@ -151,6 +152,7 @@ pub fn run() {
             commands::export_studio_png,
             commands::run_studio_region_edit,
             commands::generate_character_asset,
+            commands::check_app_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Sketch2Asset application");

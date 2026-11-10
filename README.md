@@ -20,11 +20,11 @@
 
 ---
 
-## Why Sketch2Asset 2.0?
+## Why Sketch2Asset v0.2.0?
 
 General-purpose AI image generators routinely fail at the **"last mile" of game production**: pixel art suffers from anti-aliasing blur and inconsistent sub-pixel "mixels"; sweeping sword slashes in sprite sheets breach uniform grid lines and get severed; transparent PNGs imported into Unity, Unreal, or Godot show ugly white halos under bilinear filtering; and multi-batch assets drift out of style consistency across a project.
 
-**Sketch2Asset 2.0** is rebuilt from the ground up with **Tauri 2 + Rust + Svelte 5** as a pure native desktop application with zero Python dependency. It bridges generation, character derivation, sprite sheet calibration, and pixel-level post-processing across three specialized workspaces to deliver truly **Game-Ready** assets.
+**Sketch2Asset v0.2.0** is rebuilt from the ground up with **Tauri 2 + Rust + Svelte 5** as a pure native desktop application with zero Python dependency. It bridges generation, character derivation, sprite sheet calibration, and pixel-level post-processing across three specialized workspaces to deliver truly **Game-Ready** assets.
 
 ---
 
@@ -132,8 +132,10 @@ Built on an extensible modular registry (`CHARACTER_MODULES`) to derive a comple
     - `data/library.db`: SQLite 3 (WAL mode) project and asset metadata index
     - `outputs/`: All user project folders and generated/edited PNGs
     - `models/`: Downloaded ONNX matting model weights
-- **Self-Contained Runtime Environment**:
-  - Uses Win32 `SetDllDirectoryW` loader isolation and bundles modern MSVC 14.50 + DirectML runtime DLLs alongside the binary, preventing `LoadLibraryExW failed (1114)` errors on machines with outdated system C++ runtimes.
+- **Self-Contained Runtime & Dual-Stage DLL Preloading**:
+  - Immunized against legacy Windows C++ runtimes (e.g. VS 2019 14.22 in `System32`) and strict WebView2 isolation modes (`0x800`). Employs `preload_startup_runtime_dlls()` at process entry millisecond 0 to bind bundled modern MSVC 14.50 CRT & DirectML libraries, combined with `SetDefaultDllDirectories(0x1000)` + `AddDllDirectory` + `LOAD_WITH_ALTERED_SEARCH_PATH`, eliminating `LoadLibraryExW failed (1114)` startup errors entirely.
+- **In-App Update Checker**:
+  - The Settings modal includes an "About & Update Checker" card that connects to the GitHub Releases API in real-time, displaying current and remote versions with one-click access to the latest release assets.
 
 ---
 
@@ -197,6 +199,12 @@ sketch2asset/
 ├── package.json
 └── vite.config.ts
 ```
+
+---
+
+## Acknowledgments
+
+Special thanks to the **[LINUX DO](https://linux.do/)** community and all developers, creators, and testers whose feedback, discussions, and support made this release possible!
 
 ---
 

@@ -2,6 +2,7 @@ import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import type {
   AppError,
   AppSettings,
+  AppUpdateInfo,
   AssetItem,
   CharacterGeneratePayload,
   CharacterGenerateResponse,
@@ -109,5 +110,6 @@ export const api = {
   runStudioRegionEdit: (payload: RegionEditPayload) =>
     call<RegionEditResponse>('run_studio_region_edit', { payload }),
   generateCharacterAsset: (payload: CharacterGeneratePayload) =>
-    call<CharacterGenerateResponse>('generate_character_asset', { payload })
+    call<CharacterGenerateResponse>('generate_character_asset', { payload }),
+  checkAppUpdate: () => call<AppUpdateInfo>('check_app_update')
 };

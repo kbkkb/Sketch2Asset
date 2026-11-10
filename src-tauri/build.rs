@@ -7,6 +7,7 @@ fn main() {
 
     if let Ok(profile) = std::env::var("PROFILE") {
         let target_dir = Path::new("target").join(&profile);
+        let _ = fs::create_dir_all(&target_dir);
         if target_dir.exists() {
             if let Ok(entries) = fs::read_dir("../bin") {
                 for entry in entries.flatten() {

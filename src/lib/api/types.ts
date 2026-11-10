@@ -164,3 +164,12 @@ export interface CharacterGenerateResponse {
   via: string;
   elapsedMs: number;
 }
+
+export interface AppUpdateInfo {
+  currentVersion: string;
+  latestVersion: string;
+  hasUpdate: boolean;
+  releaseUrl: string;
+  releaseNotes: string;
+  publishedAt: string;
+}

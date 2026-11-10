@@ -1234,3 +1234,82 @@ pub async fn generate_character_asset(
         elapsed_ms: start_ts.elapsed().as_millis() as u64,
     })
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdateInfo {
+    pub current_version: String,
+    pub latest_version: String,
+    pub has_update: bool,
+    pub release_url: String,
+    pub release_notes: String,
+    pub published_at: String,
+}
+
+#[tauri::command]
+pub async fn check_app_update(state: State<'_, AppState>) -> AppResult<AppUpdateInfo> {
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+    let client = &state.http;
+    let url = "https://api.github.com/repos/kbkkb/Sketch2Asset/releases/latest";
+
+    let resp = match client
+        .get(url)
+        .header("User-Agent", "Sketch2Asset-Desktop")
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r,
+        _ => {
+            return Ok(AppUpdateInfo {
+                current_version: current_version.clone(),
+                latest_version: current_version,
+                has_update: false,
+                release_url: "https://github.com/kbkkb/Sketch2Asset/releases".to_string(),
+                release_notes: String::new(),
+                published_at: String::new(),
+            });
+        }
+    };
+
+    let json: serde_json::Value = resp.json().await.unwrap_or_default();
+
+    let tag_name = json
+        .get("tag_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let release_url = json
+        .get("html_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("https://github.com/kbkkb/Sketch2Asset/releases")
+        .to_string();
+    let release_notes = json
+        .get("body")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let published_at = json
+        .get("published_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let clean_tag = tag_name.trim_start_matches('v').trim();
+    let clean_current = current_version.trim_start_matches('v').trim();
+
+    let has_update = !clean_tag.is_empty() && clean_tag != clean_current;
+
+    Ok(AppUpdateInfo {
+        current_version,
+        latest_version: if clean_tag.is_empty() {
+            "0.2.0".to_string()
+        } else {
+            tag_name
+        },
+        has_update,
+        release_url,
+        release_notes,
+        published_at,
+    })
+}

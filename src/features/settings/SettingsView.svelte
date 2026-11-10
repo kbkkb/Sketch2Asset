@@ -25,12 +25,14 @@
     SlidersHorizontal,
     Sun,
     Moon,
-    Globe
+    Globe,
+    Info,
+    ExternalLink
   } from '@lucide/svelte';
   import { appStore } from '$lib/stores/settings.svelte';
   import { i18n, SUPPORTED_LOCALES, type LocaleCode } from '$lib/i18n/index.svelte';
   import { api } from '$lib/api';
-  import type { MattingModelInfo } from '$lib/api/types';
+  import type { MattingModelInfo, AppUpdateInfo } from '$lib/api/types';
 
   let keyDraft = $state('');
   let showKey = $state(false);
@@ -43,6 +45,30 @@
   // Local AI Matting Models in Settings
   let mattingModels = $state<MattingModelInfo[]>([]);
   let loadingModelId = $state<string | null>(null);
+
+  // Update check state
+  let updateInfo = $state<AppUpdateInfo | null>(null);
+  let isCheckingUpdate = $state(false);
+
+  async function handleCheckUpdate() {
+    isCheckingUpdate = true;
+    try {
+      const res = await api.checkAppUpdate();
+      updateInfo = res;
+      if (!res.hasUpdate) {
+        appStore.toast(
+          'ok',
+          i18n.locale === 'en'
+            ? `Up to date (v${res.currentVersion})`
+            : `当前已是最新版本 (v${res.currentVersion})`
+        );
+      }
+    } catch (e: any) {
+      appStore.toast('err', String(e?.message || e));
+    } finally {
+      isCheckingUpdate = false;
+    }
+  }
 
   const IMG_REGEX =
     /image|img|dall|flux|seedream|seededit|banana|imagen|stable|sdxl|sd3|midjourney|\bmj\b|kolors|cogview|wanx|hunyuan-image|ideogram|recraft|playground|pixart|photon|irag/i;
@@ -1045,6 +1071,63 @@
                   >
                     <Download size={14} />
                     <span>{i18n.t('bundle_export_btn')}</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- About & App Update Card -->
+              <div
+                class="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-line bg-ink-1 p-6"
+              >
+                <div class="flex flex-col gap-1">
+                  <div class="flex items-center gap-2 text-xs font-bold text-fg">
+                    <Info size={14} class="text-accent" />
+                    <span>{i18n.t('about_app_title')}</span>
+                    <span class="rounded-md bg-ink-2 px-2 py-0.5 font-mono text-[11px] font-bold text-accent">
+                      v0.2.0
+                    </span>
+                    {#if updateInfo}
+                      {#if updateInfo.hasUpdate}
+                        <span class="rounded-md bg-ok/20 px-2 py-0.5 text-[11px] font-bold text-ok">
+                          {i18n.t('about_has_update')}: {updateInfo.latestVersion}
+                        </span>
+                      {:else}
+                        <span class="rounded-md bg-ink-2 px-2 py-0.5 text-[11px] font-semibold text-fg-muted">
+                          {i18n.t('about_is_latest')}
+                        </span>
+                      {/if}
+                    {/if}
+                  </div>
+                  <p class="text-xs text-fg-muted">
+                    {i18n.t('about_thanks_linuxdo')}
+                  </p>
+                </div>
+
+                <div class="flex items-center gap-2.5">
+                  {#if updateInfo?.hasUpdate}
+                    <a
+                      href={updateInfo.releaseUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      class="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-xs font-bold whitespace-nowrap text-ink-0 transition-opacity hover:opacity-90"
+                    >
+                      <ExternalLink size={14} />
+                      <span>{i18n.t('about_view_release')}</span>
+                    </a>
+                  {/if}
+                  <button
+                    type="button"
+                    disabled={isCheckingUpdate}
+                    onclick={handleCheckUpdate}
+                    class="flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-ink-2 px-3.5 py-2 text-xs font-semibold whitespace-nowrap text-fg hover:border-accent disabled:opacity-50"
+                  >
+                    {#if isCheckingUpdate}
+                      <Loader2 size={14} class="animate-spin text-accent" />
+                      <span>{i18n.t('about_checking')}</span>
+                    {:else}
+                      <RefreshCw size={14} />
+                      <span>{i18n.t('about_check_update_btn')}</span>
+                    {/if}
                   </button>
                 </div>
               </div>

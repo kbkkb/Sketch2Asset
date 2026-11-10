@@ -197,6 +197,88 @@ fn locate_onnxruntime_dll(workspace_dir: &Path) -> Option<PathBuf> {
 #[cfg(windows)]
 extern "system" {
     fn SetDllDirectoryW(lpPathName: *const u16) -> i32;
+    fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
+    fn AddDllDirectory(new_directory: *const u16) -> isize;
+    fn LoadLibraryExW(lp_lib_file_name: *const u16, h_file: isize, dw_flags: u32) -> isize;
+}
+
+#[cfg(windows)]
+fn to_wide_null(s: &std::ffi::OsStr) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    s.encode_wide().chain(Some(0)).collect()
+}
+
+#[cfg(windows)]
+fn setup_windows_dll_search_dir(dll_dir: &Path) {
+    const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x00001000;
+    let wide = to_wide_null(dll_dir.as_os_str());
+    unsafe {
+        // Ensure user-added DLL directories are searched even if WebView2/COM sets safe DLL search flags
+        SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        AddDllDirectory(wide.as_ptr());
+        SetDllDirectoryW(wide.as_ptr());
+    }
+
+    let current_path = std::env::var("PATH").unwrap_or_default();
+    let dir_str = dll_dir.to_string_lossy();
+    if !current_path.contains(dir_str.as_ref()) {
+        std::env::set_var("PATH", format!("{};{}", dir_str, current_path));
+    }
+}
+
+#[cfg(windows)]
+fn preload_dll_altered_path(dll_path: &Path) -> Result<(), String> {
+    const LOAD_WITH_ALTERED_SEARCH_PATH: u32 = 0x00000008;
+    let wide = to_wide_null(dll_path.as_os_str());
+    let handle = unsafe { LoadLibraryExW(wide.as_ptr(), 0, LOAD_WITH_ALTERED_SEARCH_PATH) };
+    if handle == 0 {
+        let err = std::io::Error::last_os_error();
+        Err(format!("LoadLibraryExW('{}') failed: {}", dll_path.display(), err))
+    } else {
+        Ok(())
+    }
+}
+
+/// Call at the very beginning of `main()` before Tauri/WebView2 initializes so bundled
+/// MSVC 14.50 runtime DLLs are mapped ahead of older system CRT DLLs in System32.
+pub fn preload_startup_runtime_dlls() {
+    #[cfg(windows)]
+    {
+        let mut dirs_to_check = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                dirs_to_check.push(dir.to_path_buf());
+                dirs_to_check.push(dir.join("resources"));
+                dirs_to_check.push(dir.join("bin"));
+                // Also support cargo/tauri dev runs inside target/<profile>
+                if let Some(p3) = dir.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
+                    dirs_to_check.push(p3.join("bin"));
+                }
+            }
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            dirs_to_check.push(cwd.join("bin"));
+        }
+
+        if let Some(dll_dir) = dirs_to_check
+            .into_iter()
+            .find(|d| d.join("onnxruntime.dll").exists() || d.join("vcruntime140.dll").exists())
+        {
+            setup_windows_dll_search_dir(&dll_dir);
+            for name in [
+                "vcruntime140.dll",
+                "vcruntime140_1.dll",
+                "msvcp140.dll",
+                "msvcp140_1.dll",
+                "msvcp140_2.dll",
+            ] {
+                let p = dll_dir.join(name);
+                if p.exists() {
+                    let _ = preload_dll_altered_path(&p);
+                }
+            }
+        }
+    }
 }
 
 fn ensure_ort_env(workspace_dir: &Path) -> AppResult<&'static Environment> {
@@ -206,17 +288,33 @@ fn ensure_ort_env(workspace_dir: &Path) -> AppResult<&'static Environment> {
         if let Some(dll_dir) = dll_path.parent() {
             #[cfg(windows)]
             {
-                use std::os::windows::ffi::OsStrExt;
-                let wide: Vec<u16> = dll_dir.as_os_str().encode_wide().chain(Some(0)).collect();
-                unsafe {
-                    SetDllDirectoryW(wide.as_ptr());
+                setup_windows_dll_search_dir(dll_dir);
+                for dep in [
+                    "vcruntime140.dll",
+                    "vcruntime140_1.dll",
+                    "msvcp140.dll",
+                    "msvcp140_1.dll",
+                    "msvcp140_2.dll",
+                    "DirectML.dll",
+                    "onnxruntime_providers_shared.dll",
+                ] {
+                    let p = dll_dir.join(dep);
+                    if p.exists() {
+                        let _ = preload_dll_altered_path(&p);
+                    }
                 }
+                // Preload onnxruntime.dll itself with LOAD_WITH_ALTERED_SEARCH_PATH so
+                // subsequent libloading::Library::new() reuses the already-mapped handle cleanly.
+                preload_dll_altered_path(&dll_path)?;
             }
 
-            let current_path = std::env::var("PATH").unwrap_or_default();
-            let dir_str = dll_dir.to_string_lossy();
-            if !current_path.contains(dir_str.as_ref()) {
-                std::env::set_var("PATH", format!("{};{}", dir_str, current_path));
+            #[cfg(not(windows))]
+            {
+                let current_path = std::env::var("PATH").unwrap_or_default();
+                let dir_str = dll_dir.to_string_lossy();
+                if !current_path.contains(dir_str.as_ref()) {
+                    std::env::set_var("PATH", format!("{};{}", dir_str, current_path));
+                }
             }
         }
         let builder = ort::init_from(&dll_path).map_err(|e| e.to_string())?;
@@ -811,5 +909,13 @@ mod tests {
         let eroded_edge = res.get_pixel(4, 8);
         assert_eq!(eroded_edge[3], 0);
         assert!(eroded_edge[0] > 180);
+    }
+
+    #[test]
+    fn test_preload_and_ort_env_load() {
+        preload_startup_runtime_dlls();
+        let ws = Path::new("..").canonicalize().unwrap_or_else(|_| PathBuf::from("D:/Sketch2Asset"));
+        let env_res = ensure_ort_env(&ws);
+        assert!(env_res.is_ok(), "ensure_ort_env failed: {:?}", env_res.err());
     }
 }

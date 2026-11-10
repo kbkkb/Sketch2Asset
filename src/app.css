@@ -1,0 +1,140 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink-0: oklch(0.12 0.012 268);
+  --color-ink-1: oklch(0.16 0.014 268);
+  --color-ink-2: oklch(0.20 0.016 268);
+  --color-ink-3: oklch(0.25 0.018 268);
+  --color-line: oklch(1 0 0 / 0.08);
+  --color-line-strong: oklch(1 0 0 / 0.16);
+  --color-fg: oklch(0.96 0.005 268);
+  --color-fg-muted: oklch(0.68 0.012 268);
+  --color-fg-subtle: oklch(0.50 0.012 268);
+
+  --color-accent: oklch(0.86 0.19 128);
+  --color-accent-hover: oklch(0.90 0.20 128);
+  --color-accent-ink: oklch(0.16 0.04 128);
+
+  --color-ok: oklch(0.78 0.16 155);
+  --color-warn: oklch(0.82 0.16 80);
+  --color-err: oklch(0.66 0.21 25);
+
+  --font-display: "Segoe UI Variable Display", "Bahnschrift", "HarmonyOS Sans SC", "Microsoft YaHei UI", sans-serif;
+  --font-sans: "Segoe UI Variable Text", "Inter", "HarmonyOS Sans SC", "Microsoft YaHei UI", sans-serif;
+  --font-mono: "Cascadia Mono", "JetBrains Mono", "Consolas", monospace;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out-quint: cubic-bezier(0.83, 0, 0.17, 1);
+}
+
+:root[data-theme="light"] {
+  --color-ink-0: oklch(0.965 0.004 268);
+  --color-ink-1: oklch(0.99 0.002 268);
+  --color-ink-2: oklch(0.93 0.006 268);
+  --color-ink-3: oklch(0.88 0.008 268);
+  --color-line: oklch(0.15 0.01 268 / 0.10);
+  --color-line-strong: oklch(0.15 0.01 268 / 0.20);
+  --color-fg: oklch(0.16 0.012 268);
+  --color-fg-muted: oklch(0.45 0.014 268);
+  --color-fg-subtle: oklch(0.60 0.012 268);
+
+  --color-accent: oklch(0.58 0.20 265);
+  --color-accent-hover: oklch(0.52 0.22 265);
+  --color-accent-ink: oklch(0.99 0.005 265);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  background-color: var(--color-ink-0);
+  color: var(--color-fg);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Hide Edge / IE native password reveal & clear buttons so our custom Eye icon is clean */
+input::-ms-reveal,
+input::-ms-clear {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Prevent browser-like image dragging or Edge image hover toolbar */
+img,
+svg {
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* Custom sleek scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-fg-subtle);
+}
+
+/* Subtle stage grid & darkroom radial glow */
+.stage-backdrop {
+  background-image:
+    radial-gradient(circle at 50% 0%, oklch(0.86 0.19 128 / 0.07), transparent 55%),
+    linear-gradient(to right, var(--color-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--color-line) 1px, transparent 1px);
+  background-size: 100% 100%, 40px 40px, 40px 40px;
+}
+
+:root[data-theme="light"] .stage-backdrop {
+  background-image:
+    radial-gradient(circle at 50% 0%, oklch(0.58 0.20 265 / 0.07), transparent 55%),
+    linear-gradient(to right, var(--color-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--color-line) 1px, transparent 1px);
+}
+
+/* Checkerboard for transparent game assets */
+.checkerboard {
+  background-image:
+    linear-gradient(45deg, oklch(0.5 0 0 / 0.12) 25%, transparent 25%),
+    linear-gradient(-45deg, oklch(0.5 0 0 / 0.12) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, oklch(0.5 0 0 / 0.12) 75%),
+    linear-gradient(-45deg, transparent 75%, oklch(0.5 0 0 / 0.12) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

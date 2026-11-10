@@ -1,0 +1,52 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Sketch2Asset",
+  "version": "2.0.0",
+  "identifier": "com.sketch2asset.app",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Sketch2Asset — AI Game Asset Forge",
+        "width": 1380,
+        "height": 880,
+        "minWidth": 1180,
+        "minHeight": 740,
+        "decorations": false,
+        "center": true,
+        "additionalBrowserArgs": "--disable-features=msVisualSearch,msEdgeImageMagnifier,msImageMagnifier,msEdgeSidebar,msHub,msImplicitSignin,msSmartScreenProtection,msTranslations,Translate,msMiniMenu --disable-pinch --overscroll-history-navigation=0"
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "../bin/DirectML.dll",
+      "../bin/onnxruntime.dll",
+      "../bin/onnxruntime_providers_shared.dll",
+      "../bin/msvcp140.dll",
+      "../bin/msvcp140_1.dll",
+      "../bin/msvcp140_2.dll",
+      "../bin/vcruntime140.dll",
+      "../bin/vcruntime140_1.dll"
+    ]
+  }
+}

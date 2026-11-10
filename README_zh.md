@@ -1,118 +1,205 @@
-# Sketch2Asset — 游戏资产本地生成 & AI 抠图修补工作站
+# Sketch2Asset — AI 游戏资产锻造、序列帧切帧与像素精修工作站
 
 <p align="center">
-  <b>专为游戏开发者、独立制作人与美术设计师打造的开源本地 Web 工具</b><br>
-  将草图/提示词转化为高精度游戏 Sprite，提供 AI 抠图、物理去白边、像素修补与无损 PNG 导出全流程。
+  <b>专为游戏开发者、独立制作人与美术设计师打造的开源原生桌面工作站</b><br>
+  集结构化提示词生图、角色三视图/同模换肤/表情差分、防出界序列帧切片与区域扩容校准、本地 DirectML GPU AI 抠图、AI 伪像素网格纯化于一体的全链路 2D 游戏资产生产工具。
 </p>
 
 <p align="center">
-  <b><a href="README.md">English</a></b> | <b><a href="README_zh.md">中文</a></b>
+  <b><a href="README.md">English</a></b> | <b><a href="README_zh.md">简体中文</a></b>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.8+-blue.svg" alt="Python Version">
-  <img src="https://img.shields.io/badge/ONNX_Runtime-DirectML%2FCUDA-green.svg" alt="ONNX Runtime">
-  <img src="https://img.shields.io/badge/UI-Pro_Studio-violet.svg" alt="Pro Studio Layout">
-  <img src="https://img.shields.io/badge/Theme-Dark%2FLight-orange.svg" alt="Dual Theme">
-  <img src="https://img.shields.io/badge/i18n-ZH%2FEN-red.svg" alt="Multi-Language">
-  <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License">
+  <img src="https://img.shields.io/badge/Architecture-Tauri_2_%2B_Rust-orange.svg" alt="Tauri 2 + Rust">
+  <img src="https://img.shields.io/badge/Frontend-Svelte_5_Runes-ff3e00.svg" alt="Svelte 5">
+  <img src="https://img.shields.io/badge/Matting-ONNX_DirectML_GPU-10b981.svg" alt="ONNX Runtime DirectML">
+  <img src="https://img.shields.io/badge/Storage-AppData_%2B_DPAPI-6366f1.svg" alt="AppData Isolation">
+  <img src="https://img.shields.io/badge/i18n-简体中文_%2F_English-06b6d4.svg" alt="i18n">
+  <img src="https://img.shields.io/badge/License-MIT-22c55e.svg" alt="MIT License">
 </p>
 
 ---
 
-## ✨ 核心亮点
+## 为什么选择 Sketch2Asset 2.0？
 
-### 🎨 1. 草图引导与资产生成 (Sketch & Generation)
-- **草图重绘 (Sketch-to-Asset)**：支持上传线稿/概念草图，结合提示词生成保持原姿态的高精游戏道具与 Icon。
-- **多元美术风格预设**：预设像素风 (Pixel Art)、美式卡通 (Cartoon)、二次元 (Anime)、低多边形 (Low Poly)、3D 渲染与写实等风格。
-- **纯白背景优化**：默认摄影棚白底规则，极大降低后续 AI 抠图与边缘分割瑕疵。
-- **主流 API 兼容**：完美兼容 OpenAI 图像接口 (`/v1/images/edits`) 与对话出图接口 (`/v1/chat/completions`)。
+通用 AI 生图工具在面对实际游戏开发管线时，往往卡在**“最后 1 公里”**：生成的像素图带有扩散抗锯齿杂色与大小不一的“伪像素（Mixels）”、角色挥刀序列帧跨过网格线被拦腰截断、透明 PNG 导入 Unity/Unreal/Godot 后边缘泛起一圈白边、同项目多批次资产画风前后割裂。
 
-### 🛠 2. Pro Studio AI 抠图工作台 (Matting & Editing)
-- **批量拖拽与多图导入**：支持将单张或多张外部图片直接拖拽进工作台视口，支持文件多选批量导入项目图库并即刻编辑。
-- **SOTA 深度学习抠图**：内置 BiRefNet、BEN2、ISNet 等模型，支持 GPU (DirectML/CUDA) 硬件加速。
-- **专业级去白边 & 引擎保护**：
-  - **物理前景色反解 (Unmixing)**：还原白底染色的半透明边缘原色。
-  - **边缘收边 (Choke 0~3px)**：边缘透明度内缩，解决白色系资产贴白背景时的物理残留。
-  - **4px 色彩外扩 (Bleed)**：自动外扩边缘 4px 颜色，防止 Unity / Unreal 双线性采样边缘发白。
-- **精细化修补与导出**：支持点选恢复/擦除、笔刷涂抹、自动裁透明边与自定义分辨率无损 PNG 导出。
-
-### 🎮 3. AI 像素图网格纯化与色块量化修复 (Pixel Art Cleaner)
-- **色块杂色与假像素修复**：彻底消除 AI 生成像素图中由于扩散模型、抗锯齿和插值造成的渐变杂色，保证每个像素块内 **100% 绝对单一平色**。
-- **智能网格检测与自定义**：支持网格尺寸自适应检测 (Auto)，或指定 32×32、64×64、128×128、256×256 与固定像素单元格。
-- **复古调色板量化与收敛**：内置 16/32/64 色聚类量化，支持经典 **PICO-8** 与 **Game Boy** 调色板映射。
-- **透明边缘硬化与原生尺寸导出**：消除半透明白边噪点，支持以真实原生像素尺寸（如 64×64）一键导出 PNG。
-- **生图管线自动联动**：生成像素风资产时自动进行纯化处理，并在结果区提供一键快速纯化操作。
-
-### 🌐 4. 先锋数字 UI 与国际化 (Design & i18n)
-- **Awwwards 三栏 Inspector 架构**：专业游戏引擎级三栏布局，零 Emoji 侵扰，全量采用 Lucide 矢量图标。
-- **深浅双主题 (Dark / Light Mode)**：一键切换高奢深色与日间冰白浅色主题，`localStorage` 自动持久化。
-- **中英双语国际化 (i18n ZH/EN)**：支持全界面文本、下拉框及提示信息的无缝实时双语切换。
-
-### 📁 5. 项目归档与一致性锁定 (Project Hub)
-- **多项目隔离归档**：按项目自动落盘至 `outputs/项目名/`。
-- **风格一致性锁定**：每个项目可独立配置提示词后缀与美术设定 (`project.json`)，保证同项目资产风格统一。
-- **配置 JSON 导入/导出**：一键备份/迁移 API 配置与项目风格方案（只新增不覆盖）。
+**Sketch2Asset 2.0** 采用 **Tauri 2 + Rust + Svelte 5** 纯原生桌面架构彻底重写，零 Python 环境依赖，将生图、角色派生、序列帧校准与像素级后处理整合在三大专业工作台中，直接产出可拖入游戏引擎使用的生产级（Game-Ready）资产。
 
 ---
 
-## 🚀 快速开始
+## 核心功能全景
 
-### 1. 克隆仓库与启动服务
+### 一、 资产锻造工坊（Asset Forge）— 结构化游戏资产生成
+
+1. **6 大游戏资产原型（Archetypes）与专属修饰词库**
+   切换不同资产类型时，系统自动注入对应的工业级构图规范，并提供专属修饰词一键点选：
+   - **游戏道具图标（Item Icon）**：独立居中、清晰剪影、留白安全边距；支持 *45° 等轴测视角、正视对称构图、高对比轮廓光、金属与宝石高光、战损古旧质感*。
+   - **复古像素精灵（Pixel Sprite）**：强制 1:1 严格等大网格、零伪像素（Zero Mixels）、纯平色块；支持 *32×32 经典颗粒度、64×64 精细像素、1px 深色外描边、横版平台视角、俯视 RPG 视角*，**生图落盘时自动联动像素网格纯化管线**。
+   - **角色立绘/设定（Character Card）**：全身完整头脚入画；支持 *标准 A-Pose 设定站姿、动态战斗姿态、正侧背三视图设定、层次感服饰材质*。
+   - **无缝地表贴图（Tile Texture）**：正交俯视、均匀漫反射照明；支持 *四方连续无缝循环（Seamless Tileable）、90° 垂直正交俯视、无方向阴影、手绘风格化肌理*。
+   - **游戏 UI 组件（UI Element）**：正视对称、中心留空；支持 *九宫格可拉伸框体（9-Slice Ready）、华丽金属雕花边角、技能/成就徽章底座、科幻全息几何框*。
+   - **自由创作（Free Mode）**：无固定构图限制，支持 *清晰独立剪影、影棚级体积光、游戏资产级纯净度*。
+
+2. **负面护栏（Negative Guardrails）与变量矩阵批量裂变**
+   - **5 大预设负面护栏**：一键开启 *禁文字/水印/UI字、禁边缘裁切残缺、禁地面投射阴影、禁杂乱背景道具、禁景深模糊/噪点*，并支持追加自定义负面词。
+   - **`[A|B|C]` 变量矩阵语法**：在提示词中编写如 `一把[火焰|寒冰|雷电]属性的[巨剑|法杖]`，系统将自动按笛卡尔积展开为最多 16 组独立变体并发生成，快速完成同系列装备图标探索。
+
+3. **项目风格锚定（Project Hub & Style Reference Anchors）**
+   - 支持创建、重命名与切换独立游戏项目，资产按项目自动归档。
+   - 每个项目可绑定专属风格提示词后缀（Style Prompt）及最多 **4 张风格锚定参考图**，开启后每次生成自动注入参考基底，保障全项目资产画风高度一致。
+
+4. **多图参考与框选批注引导（Region Annotation）**
+   - 支持拖入或粘贴多张参考图（`[#1]`、`[#2]`...），并可直接在参考图上**拉框标记编号区域**、填写局部修改指令，系统自动合成为带视觉标记框的引导图交由多模态模型精准执行。
+   - 内置 8 大画风（16-Bit 像素、手绘卡通、二次元赛璐璐、3D 黏土/树脂渲染、低多边形 Low-Poly、PBR 写实、绘本水彩）及全套分辨率（`1024×1024`、`1536×1024`、`1920×1080` 16:9 宽屏、`2048×2048` 2K、`3840×2160` 4K UHD 与自定义宽高）。
+
+---
+
+### 二、 角色工坊（Character Workshop）— 三视图、序列帧与表情差分
+
+采用可扩展模块化架构，围绕单个角色立绘衍生全套游戏角色资源：
+
+#### `MOD-01` 三视图与角色换肤（Turnaround & Skinning）
+- **标准正/侧/背三视图生成与自动切分**：基于角色参考立绘或文字描述，生成水平排列、头顶与脚底严格对齐的正视、侧视、背视设定图；内置纵向像素投影波谷检测算法，自动避开手臂与衣角粘连切分为 3 张独立视图，支持拖拽分割线手动微调并一键入库或设为主立绘。
+- **锁定体型同模换肤（Identity-Locked Skinning）**：严格锁定当前角色的面部特征、发型与头身比例，仅根据换装指令派生不同职业护甲、派系配色或节日时装。
+
+#### `MOD-02` 序列帧动画工坊（Sprite Sheet Studio）
+- **8 大动作预设与虚拟安全区网格引导**：
+  - 内置 **默认自由模板**（虚拟占位提示打字即消，无任何内置动作词污染）及 **待机呼吸（Idle）、横向行走（Walk）、高速奔跑（Run）、近战挥砍（Attack）、技能施法（Cast）、跳跃起落（Jump）、受击硬直（Hit/KO）** 8 套专业动作分解规则。
+  - 生成时自动构建并传入 **虚拟安全区网格参考图（Safe-Zone Grid Guide）**，辅助多模态模型感知行列边界与脚底基线。
+- **连通域防跨格切帧与刀光保护**：
+  - **连通域智能聚类（Smart Island Slicing）**：自动追踪与本帧角色相连的武器末端或披风，拒绝生硬一刀切；同时自动剔除邻格越界伸入当前格角落的脚尖或残影。
+  - **刀光特效无损保留**：未勾选自动去白底时，100% 原样保留高光刀光、剑气与半透明特效，绝不发生误抠。
+- **脚底重心对齐与防出界安全画布**：
+  - 自动检测每帧角色双脚重心并对齐至统一地面基线；**单帧位置平移与画布尺寸完全解耦**，确保微调时为纯刚体平移，绝不产生任何缩放呼吸抖动。
+  - 自动计算全序列对齐后的最大武器挥砍与跳跃跨度，自适应扩容统一安全画布，长刀挥砍 100% 零截断。
+- **单帧双通道校准：位置平移 + 区域扩容（Bounds Expand）**：
+  - **位置平移（Position Shift）**：支持单帧 `←` `→` `↑` `↓` 像素级平移与一键复位 `⟲`。
+  - **区域扩容（Bounds Expand）**：针对大幅挥刀跨入下一格的场景（如第 5 帧刀光伸入第 6 帧），支持对当前帧独立调节 **右扩展（R）、左扩展（L）、上/下扩展（T/B）** 采样边界，将跨界刀光完整纳回本帧，或通过负向收缩直接裁剪剔除邻格串门残片。
+  - **交互式大图网格点选**：右侧「待切帧序列帧大图」支持直接点击任意格子选中对应帧，实时高亮当前校准帧并显示扩容标记（如 `+40R`）。
+- **动效预览器与重组导出**：
+  - 预览视口支持 **鼠标滚轮无级缩放（0.25x ~ 8x）**、左键拖拽平移、一键复位视角、2~24 FPS 帧率调节、洋葱皮（Onion Skin）残影对比与单帧启用/禁用（ON/OFF）筛选。
+  - 支持将校准后的有效帧重新拼合导出为**标准等宽高网格 Sprite Sheet PNG**，或直接归档至项目资产库（三大工坊实时同步）。
+
+#### `MOD-03` 角色表情差分集（Expression Sheet）
+- 支持 **2×2（4 表情）、2×3（6 表情）、3×3（9 表情）** 网格规格，锁定角色五官与画风，一次生成喜悦、愤怒、悲伤、惊讶、害羞、得意等成套 AVG 对话立绘差分，自动切分为独立表情单图并支持单张或整套入库。
+
+---
+
+### 三、 精修与像素纯化工坊（Canvas Studio）— 原生 GPU 抠图与像素重塑
+
+1. **本地 DirectML GPU AI 抠图与模型中心**
+   - 基于 Rust `ort` 绑定原生 **ONNX Runtime + DirectML**，全面支持 NVIDIA / AMD / Intel 显卡硬件加速（无 GPU 时自动平滑回退 CPU），无需安装 Python 或 CUDA。
+   - 内置 6 款模型在线一键下载与管理：
+     | 模型 ID | 体积 / 精度 | 适用场景说明 |
+     | :--- | :--- | :--- |
+     | **`birefnet`** | ~490 MB (FP16) | **SOTA 旗舰首选**：复杂轮廓、镂空结构、半透明材质分割精度最高 |
+     | **`ben2`** | ~220 MB | 新一代均衡模型，兼顾极快推理速度与锐利边缘质量 |
+     | **`birefnet-hrsod`** | ~490 MB (FP16) | 高分辨率细节特化版，适合精细立绘与大型概念图 |
+     | **`birefnet-lite`** | ~220 MB | 轻量高速版，适合低配设备或快速预览 |
+     | **`isnet-general-use`** | ~178 MB | 极速通用版，适合简单白底道具图标的快速抠图 |
+     | **`isnet-anime`** | ~176 MB | 二次元/动漫角色特化模型，发丝与赛璐璐线条保留出色 |
+   - 同时内置毫秒级 **纯色背景边缘泛洪快抠（Solid-Color Cutout）**，针对纯白/纯色底图无需跑深度学习模型即可瞬间去底。
+
+2. **游戏引擎级去白边三阶保护**
+   - **物理前景色反解（Foreground Unmixing）**：从半透明边缘像素中数学剥离白底混色，还原物体真实边缘色。
+   - **Alpha 边缘内缩收边（Choke 0~3px）**：向内收缩透明度边界，彻底斩断残留浅色白边。
+   - **导出 4px 边缘色彩外扩（Color Bleed）**：导出透明 PNG 时自动将前景边缘色彩向外延展 4px（保持 Alpha=0），彻底解决 Unity / Unreal / Godot 双线性纹理采样时出现的暗边或白晕。
+
+3. **AI 像素图网格纯化器（Pixel Art Cleaner）**
+   - **根治假像素与杂色**：自动检测或指定像素网格（Auto / 32×32 / 64×64 / 128×128 / 256×256 / 固定 N px），对每个单元格执行中心主色提取，消除扩散模型产生的渐变过渡与杂色，保证每个像素块 **100% 纯平单色**。
+   - **细节保留模式与调色板量化**：提供标准模式与高保真细节模式（保护角色眼部高光等微特征）；支持 16/32/64 色聚类收敛及经典 **PICO-8（16 色）**、**Game Boy（4 色）** 复古调色板映射。
+   - **原生像素尺寸直出**：支持勾选「按原生 1:1 像素尺寸导出」，将 1024×1024 的网格像素图直接无损降采样导出为真正的 `64×64` 或 `32×32` 极小体积 PNG。
+
+4. **7 大交互修补工具与局部批注 AI 重绘**
+   - **魔棒找回 / 魔棒擦除**：点击被 AI 误抠掉的刀光或身体部位，按容差从原图洪水填充找回；或点击残留背景块一键连通擦除。
+   - **笔刷涂抹恢复 / 笔刷擦除**：可调笔刷大小自由手涂精修 Alpha 通道。
+   - **选区裁剪 & 一键紧凑裁边（Auto-Trim）**：手动框选裁剪，或一键裁除四周冗余透明像素。
+   - **区域框选批注与 AI 局部重绘（Annotate & Redraw）**：直接在画布上框选多个彩色编号框（`#1`、`#2`...），为每个区域输入修改意见（如“#1 剑柄改为金色龙纹”），一键提交 AI 定向重绘并自动回填至当前画布。
+   - **4 种专业检验底色与历史栈**：支持透明棋盘格、深黑底、纯白底与**品红测试底（`#FF00FF`）** 一键切换，按住按钮实时对比原图，内置 40 步撤销/重做（`Ctrl+Z` / `Ctrl+Y`）。
+
+---
+
+## 四、 API 枢纽与系统级数据安全隔离
+
+- **双栏穿梭式模型管理**：
+  - 不预置任何干扰性默认模型；支持一键从服务端 `/v1/models` 拉取可用模型池，提供图像模型智能筛选、关键词搜索、**超长模型名完整悬浮提示（Tooltip）**、批量移入启用列表及手动输入自定义模型 ID。
+  - 同时兼容标准 OpenAI Images 接口（`/v1/images/generations` & `/v1/images/edits`）与多模态 Chat Completions 接口（`/v1/chat/completions`）。
+- **C 盘系统级数据安全隔离（零仓库污染）**：
+  - **API Key 加密存储**：通过 Windows 原生凭据管理器（DPAPI）与系统用户目录加密保存，绝不在工程文件夹内生成明文配置。
+  - **全量用户数据隔离至 `%AppData%\com.sketch2asset.app`**：
+    - `settings.json` / `secrets.json`：应用偏好设置与凭据备份
+    - `data/library.db`：SQLite 3（WAL 模式）资产与项目元数据索引库
+    - `outputs/`：所有用户项目文件夹与生成的原图/精修图
+    - `models/`：在线下载的 ONNX 抠图模型权重文件
+- **自包含免安装运行环境**：
+  - 内置 `SetDllDirectoryW` 动态库加载隔离与全套现代 MSVC 14.50 / DirectML 运行时库，无论目标电脑系统环境多旧，解压或安装后均可直接启动使用，彻底杜绝 `LoadLibraryExW failed (1114)` 等环境报错。
+
+---
+
+## 本地开发与构建指南
+
+### 1. 环境依赖
+- **操作系统**：Windows 10 / 11 (x64)
+- **前端工具链**：[Node.js](https://nodejs.org/) >= 18，[pnpm](https://pnpm.io/) >= 9
+- **后端工具链**：[Rust](https://www.rust-lang.org/) >= 1.75 (MSVC toolchain)
+
+### 2. 开发调试
 ```bash
-git clone https://github.com/your-username/sketch2asset.git
-cd sketch2asset
+# 1. 安装前端依赖
+pnpm install
 
-# Windows 一键启动
-start.bat
-
-# 或通过 Python 启动
-python server.py
+# 2. 启动 Tauri 桌面开发窗口（支持前端热重载）
+pnpm tauri dev
 ```
-启动后在浏览器访问 `http://127.0.0.1:8000`。
 
-### 2. （可选）安装 AI 抠图 GPU 加速环境
+### 3. 类型检查与生产构建
 ```bash
-# 安装基础 AI 抠图环境
-python setup_matting.py
+# 前端 Svelte / TypeScript 严格类型检查
+pnpm check
 
-# 安装 GPU (DirectML) 加速环境（适用于 N卡/A卡/Intel 显卡）
-python setup_matting.py --dml
+# 构建前端生产包
+pnpm build
+
+# 编译 Rust Release 原生二进制程序
+cargo build --release --manifest-path src-tauri/Cargo.toml --features tauri/custom-protocol
 ```
 
 ---
 
-## 🤖 抠图模型说明
-
-工作台 Inspector 面板支持自由切换 AI 抠图模型：
-
-| 模型 | 特征说明 | 推荐场景 |
-|---|---|---|
-| **`birefnet`** (默认) | SOTA 级完整版 (490MB)，显著性目标分割最强模型 | **高精度资产、复杂主体、透明材质（首选）** |
-| **`ben2`** | 2025 新一代模型，兼顾推理速度与质量 | 复杂图像快速抠图 |
-| **`birefnet-hrsod`** | 高分辨率特化训练版 | 大尺寸概念图 |
-| **`birefnet-lite`** | 轻量级模型 (CPU 约 6 秒) | 低配 CPU 环境 |
-| **`isnet-general-use`**| 极速推理 (CPU 约 0.6 秒) | 简单白底图快速批量抠图 |
-| **`isnet-anime`** | 动漫/二次元角色特化模型 | 动漫人设与角色立绘 |
-
----
-
-## 📁 目录结构
+## 工程目录结构
 
 ```text
 sketch2asset/
-├── start.bat                  # Windows 一键启动与依赖自动补全脚本
-├── requirements.txt           # 基础运行依赖包清单
-├── server.py                 # 本地轻量服务器 (托管 + 代理 API + 项目管理)
-├── index.html                # 前端 App (Awwwards 布局 + Canvas 修补 + i18n + 动态主题)
-├── setup_matting.py / .bat   # AI 抠图环境安装与模型自动下载脚本
-├── matting_worker.py         # AI 抠图常驻推理进程 (ONNX Runtime)
-├── models/                   # AI 抠图 ONNX 模型目录
-└── outputs/                  # 生成资产与图库归档落盘目录
+├── src/                                  # Svelte 5 前端源码
+│   ├── features/
+│   │   ├── generate/                     # 资产锻造工坊（原型预设、修饰词、变量裂变、多图批注）
+│   │   ├── character/                    # 角色工坊（三视图换肤、序列帧切帧与区域扩容、表情差分）
+│   │   ├── studio/                       # 精修工坊（AI 抠图、像素纯化、魔棒/笔刷修补、框选重绘）
+│   │   └── settings/                     # 设置中心（API 供应商穿梭管理、主题与多语言下拉切换）
+│   ├── lib/
+│   │   ├── components/                   # 通用 UI 组件（无边框标题栏、带悬浮全称的模型选择器等）
+│   │   ├── imaging/                      # 核心图像算法（连通域切片、脚底重心对齐、像素纯化、前景色反解）
+│   │   ├── i18n/                         # 中英双语响应式字典
+│   │   └── stores/                       # 全局状态与跨分页资产实时同步流
+│   └── App.svelte                        # 根视图容器
+├── src-tauri/                            # Tauri 2 + Rust 后端源码
+│   ├── src/
+│   │   ├── commands/                     # 前后端 IPC 命令集
+│   │   ├── library/                      # SQLite 资产库管理与文件自动同步
+│   │   ├── matting/                      # ONNX Runtime (DirectML) 抠图推理与去白边后处理
+│   │   ├── providers/                    # OpenAI Images / Chat 双协议生图客户端
+│   │   ├── secrets.rs                    # Windows Keyring + AppData 安全凭据管理
+│   │   └── state.rs                      # AppData 目录初始化与旧版数据自动安全迁移
+│   ├── build.rs                          # 构建时 DLL 自动同步脚本
+│   ├── Cargo.toml                        # Rust 依赖配置
+│   └── tauri.conf.json                   # 窗口与打包资源（bundle.resources）配置
+├── package.json
+└── vite.config.ts
 ```
 
 ---
 
-## 📄 开源协议
+## 开源协议
 
-本项目基于 [MIT License](LICENSE) 开源。自由用于个人与商业游戏项目开发。
+本项目基于 [MIT License](LICENSE) 开源，可自由用于个人独立游戏与商业游戏项目开发。

@@ -2,27 +2,75 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.dll
+*.exe
+*.dylib
+*.so
 
-# Local Runtime Generated AI Models (Will be downloaded automatically by setup_matting.py)
+# Compiled binaries and release outputs
+bin/
+/bin/
+
+# Node / Frontend build
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Rust / Tauri build
+target/
+src-tauri/target/
+src-tauri/gen/
+
+# Local Runtime Generated AI Models (weights)
 models/
+/models/
+*.onnx
 
 # Local Generated Gallery & Output Images
 outputs/
+/outputs/
 
-# Local Runtime Logs & Auto Configs
+# Local User Databases & Storage
+*.db
+*.db-journal
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Local Runtime Logs & Auto Configs (contains user API Keys and preferences)
 matting_worker.log
+*.log
 matting_config.json
 config.json
 *.config.json
+*.env
+*.env.*
+*.key
+*.pem
+*.cert
+
+# AI Agent / Dev Workflow Folders & Personal metadata
+.trellis/
+/.trellis/
+.trellis
+.agent/
+/.agent/
+.claude/
+/.claude/
+.cursor/
+/.cursor/
+.vscode/
+.idea/
+.zed/
+/AGENTS.md
+AGENTS.md
 
 # Environment / OS Files
 .DS_Store
 Thumbs.db
 *.swp
 *.tmp
-/.trellis
-/.agent
-/.claude
-/.cursor
+*.old
+*.bak
+*.old.exe
 /.gitattributes
-/AGENTS.md

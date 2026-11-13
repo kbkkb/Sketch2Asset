@@ -20,17 +20,59 @@ export interface AppError {
   details?: string | null;
 }
 
+export interface ComfyWorkflowConfig {
+  mode: 'builtin' | 'custom';
+  workflowName: string;
+  rawWorkflowJson: string;
+  positiveNodeId: string;
+  positiveField: string;
+  negativeNodeId: string;
+  negativeField: string;
+  imageNodeId: string;
+  secondaryImageNodeId: string;
+  latentNodeId: string;
+  seedNodeId: string;
+  denoiseStrength: number;
+}
+
+export interface ComfyNodeSlotOption {
+  nodeId: string;
+  classType: string;
+  title: string;
+  field: string;
+  preview: string;
+}
+
+export interface ComfyWorkflowAnalysis {
+  format: 'api' | 'ui_converted' | 'png_embedded' | string;
+  nodeCount: number;
+  normalizedApiJson: string;
+  textNodes: ComfyNodeSlotOption[];
+  imageNodes: ComfyNodeSlotOption[];
+  latentNodes: ComfyNodeSlotOption[];
+  seedNodes: ComfyNodeSlotOption[];
+  suggestedPositiveNodeId: string;
+  suggestedPositiveField: string;
+  suggestedNegativeNodeId: string;
+  suggestedNegativeField: string;
+  suggestedImageNodeId: string;
+  suggestedSecondaryImageNodeId: string;
+  suggestedLatentNodeId: string;
+  suggestedSeedNodeId: string;
+}
+
 export interface ProviderProfile {
   id: string;
   name: string;
   apiBase: string;
-  apiMode: 'images' | 'chat';
+  apiMode: 'images' | 'chat' | 'comfyui';
   apiModel: string;
   /** Enabled models shown in the bottom Command Dock of Asset Forge */
   models: string[];
   /** Full pool of models fetched from remote `/v1/models` */
   fetchedModels?: string[];
   hasKey: boolean;
+  comfyConfig?: ComfyWorkflowConfig | null;
 }
 
 export interface AppSettings {
@@ -172,4 +214,25 @@ export interface AppUpdateInfo {
   releaseUrl: string;
   releaseNotes: string;
   publishedAt: string;
+}
+
+export interface AgentTargetInfo {
+  id: string;
+  name: string;
+  vendor: string;
+  detected: boolean;
+  mcpInstalled: boolean;
+  skillInstalled: boolean;
+  mcpConfigPath: string;
+  skillPath: string;
+}
+
+export interface AgentHubStatus {
+  mcpExePath: string;
+  appSkillDir: string;
+  mcpJsonSnippet: string;
+  codexTomlSnippet: string;
+  cliExampleSnippet: string;
+  skillMarkdown: string;
+  agents: AgentTargetInfo[];
 }

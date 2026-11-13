@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Sketch2Asset",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "identifier": "com.sketch2asset.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -38,15 +38,25 @@
       "icons/icon.png",
       "icons/icon.ico"
     ],
-    "resources": [
-      "../bin/DirectML.dll",
-      "../bin/onnxruntime.dll",
-      "../bin/onnxruntime_providers_shared.dll",
-      "../bin/msvcp140.dll",
-      "../bin/msvcp140_1.dll",
-      "../bin/msvcp140_2.dll",
-      "../bin/vcruntime140.dll",
-      "../bin/vcruntime140_1.dll"
-    ]
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": true
+      }
+    },
+    "resources": {
+      "../bin/sketch2asset-mcp.exe": "sketch2asset-mcp.exe",
+      "../bin/DirectML.dll": "DirectML.dll",
+      "../bin/onnxruntime.dll": "onnxruntime.dll",
+      "../bin/onnxruntime_providers_shared.dll": "onnxruntime_providers_shared.dll",
+      "../bin/msvcp140.dll": "msvcp140.dll",
+      "../bin/msvcp140_1.dll": "msvcp140_1.dll",
+      "../bin/msvcp140_2.dll": "msvcp140_2.dll",
+      "../bin/vcruntime140.dll": "vcruntime140.dll",
+      "../bin/vcruntime140_1.dll": "vcruntime140_1.dll",
+      "../README.md": "README.md",
+      "../README_zh.md": "README_zh.md"
+    }
   }
 }

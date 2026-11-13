@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use crate::error::AppResult;
 use crate::library::db::LibraryDb;
 use crate::matting::MattingEngine;
+use crate::providers::comfyui::ComfyWorkflowConfig;
 use crate::secrets::SecretStore;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,7 +15,7 @@ pub struct ProviderProfile {
     pub id: String,
     pub name: String,
     pub api_base: String,
-    pub api_mode: String, // "images" | "chat"
+    pub api_mode: String, // "images" | "chat" | "comfyui"
     pub api_model: String,
     /// Enabled models shown in the bottom Command Dock of Asset Forge (right shuttle pane)
     pub models: Vec<String>,
@@ -23,6 +24,9 @@ pub struct ProviderProfile {
     pub fetched_models: Vec<String>,
     #[serde(default)]
     pub has_key: bool,
+    /// Local ComfyUI workflow & slot binding configuration
+    #[serde(default)]
+    pub comfy_config: Option<ComfyWorkflowConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +61,7 @@ impl Default for AppSettings {
                 models: Vec::new(),
                 fetched_models: Vec::new(),
                 has_key: false,
+                comfy_config: None,
             }],
             active_project: String::new(),
             default_archetype: "item_icon".to_string(),
@@ -217,7 +222,7 @@ impl AppState {
         }
 
         for prof in &mut settings.profiles {
-            prof.has_key = secrets.has_key(&prof.id);
+            prof.has_key = secrets.has_key(&prof.id) || prof.api_mode == "comfyui";
         }
         if !settings
             .profiles
@@ -301,7 +306,7 @@ impl AppState {
                 id: id.clone(),
                 name,
                 api_base,
-                api_mode,
+                api_mode: api_mode.clone(),
                 api_model: api_model.clone(),
                 models: if models.len() > 8 {
                     vec![api_model]
@@ -309,7 +314,8 @@ impl AppState {
                     models.clone()
                 },
                 fetched_models: models,
-                has_key: !api_key.is_empty(),
+                has_key: !api_key.is_empty() || api_mode == "comfyui",
+                comfy_config: None,
             });
         }
 
@@ -335,10 +341,28 @@ impl AppState {
         })
     }
 
+    pub fn reload_settings_from_disk(&self) {
+        if self.settings_path.exists() {
+            if let Ok(raw) = fs::read_to_string(&self.settings_path) {
+                if let Ok(mut disk_settings) = serde_json::from_str::<AppSettings>(&raw) {
+                    if !disk_settings.profiles.is_empty() {
+                        for prof in &mut disk_settings.profiles {
+                            prof.has_key =
+                                self.secrets.has_key(&prof.id) || prof.api_mode == "comfyui";
+                        }
+                        if let Ok(mut guard) = self.settings.lock() {
+                            *guard = disk_settings;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn persist_settings(&self) -> AppResult<()> {
         let mut guard = self.settings.lock().unwrap();
         for prof in &mut guard.profiles {
-            prof.has_key = self.secrets.has_key(&prof.id);
+            prof.has_key = self.secrets.has_key(&prof.id) || prof.api_mode == "comfyui";
         }
         let json = serde_json::to_string_pretty(&*guard).unwrap_or_default();
         let tmp = self.settings_path.with_extension("json.tmp");

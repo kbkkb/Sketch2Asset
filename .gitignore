@@ -50,9 +50,10 @@ config.json
 *.cert
 
 # AI Agent / Dev Workflow Folders & Personal metadata
-.trellis/
-/.trellis/
-.trellis
+!.trellis/
+.trellis/*
+!.trellis/tasks/
+!.trellis/.gitignore
 .agent/
 /.agent/
 .claude/

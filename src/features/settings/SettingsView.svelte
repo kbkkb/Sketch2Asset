@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { getVersion } from '@tauri-apps/api/app';
   import {
     Plus,
     Trash2,
@@ -32,7 +33,13 @@
   import { appStore } from '$lib/stores/settings.svelte';
   import { i18n, SUPPORTED_LOCALES, type LocaleCode } from '$lib/i18n/index.svelte';
   import { api } from '$lib/api';
-  import type { MattingModelInfo, AppUpdateInfo } from '$lib/api/types';
+  import type {
+    MattingModelInfo,
+    AppUpdateInfo,
+    AgentHubStatus,
+    ComfyWorkflowConfig,
+    ComfyWorkflowAnalysis
+  } from '$lib/api/types';
 
   let keyDraft = $state('');
   let showKey = $state(false);
@@ -41,14 +48,31 @@
   let onlyImageFilter = $state(false);
   let customModelInput = $state('');
   let importInputEl = $state<HTMLInputElement | null>(null);
+  let comfyWorkflowInputEl = $state<HTMLInputElement | null>(null);
+  let comfyAnalysis = $state<ComfyWorkflowAnalysis | null>(null);
+  let analyzingComfy = $state(false);
 
   // Local AI Matting Models in Settings
   let mattingModels = $state<MattingModelInfo[]>([]);
   let loadingModelId = $state<string | null>(null);
 
+  // AI Agent Hub (MCP & Skill) state
+  let agentHub = $state<AgentHubStatus | null>(null);
+  let busyAgentId = $state<string | null>(null);
+  let activeSnippetTab = $state<'json' | 'toml' | 'cli' | 'skill'>('json');
+
   // Update check state
+  let appVersion = $state('0.2.1');
   let updateInfo = $state<AppUpdateInfo | null>(null);
   let isCheckingUpdate = $state(false);
+
+  onMount(async () => {
+    try {
+      appVersion = await getVersion();
+    } catch {
+      appVersion = '0.2.1';
+    }
+  });
 
   async function handleCheckUpdate() {
     isCheckingUpdate = true;
@@ -85,6 +109,18 @@
     } catch {
       keyDraft = '';
     }
+    if (prof.apiMode === 'comfyui' && prof.comfyConfig?.rawWorkflowJson) {
+      try {
+        comfyAnalysis = await api.analyzeComfyuiWorkflow(
+          prof.apiBase || 'http://127.0.0.1:8188',
+          prof.comfyConfig.rawWorkflowJson
+        );
+      } catch {
+        comfyAnalysis = null;
+      }
+    } else {
+      comfyAnalysis = null;
+    }
   }
 
   async function loadMattingModels() {
@@ -95,9 +131,62 @@
     }
   }
 
+  async function loadAgentHub() {
+    try {
+      agentHub = await api.getAgentHubStatus();
+    } catch {
+      agentHub = null;
+    }
+  }
+
+  async function handleInstallAgent(agentId: string) {
+    if (busyAgentId) return;
+    busyAgentId = agentId;
+    try {
+      agentHub = await api.installAgentIntegration(agentId);
+      appStore.toast('ok', i18n.t('agent_toast_installed'));
+    } catch (e: any) {
+      appStore.toast('err', String(e?.message || e));
+    } finally {
+      busyAgentId = null;
+    }
+  }
+
+  async function handleUninstallAgent(agentId: string) {
+    if (busyAgentId) return;
+    busyAgentId = agentId;
+    try {
+      agentHub = await api.uninstallAgentIntegration(agentId);
+      appStore.toast('info', i18n.t('agent_toast_uninstalled'));
+    } catch (e: any) {
+      appStore.toast('err', String(e?.message || e));
+    } finally {
+      busyAgentId = null;
+    }
+  }
+
+  async function handleExportAgentBundle() {
+    try {
+      const outDir = await api.exportAgentSkillBundle(true);
+      appStore.toast('ok', `${i18n.t('agent_toast_exported')} ${outDir}`);
+    } catch (e: any) {
+      appStore.toast('err', String(e?.message || e));
+    }
+  }
+
+  async function copySnippet(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      appStore.toast('ok', i18n.t('toast_copied'));
+    } catch {
+      appStore.toast('err', 'Copy failed');
+    }
+  }
+
   onMount(() => {
     loadProfileKey();
     loadMattingModels();
+    loadAgentHub();
   });
 
   async function handleDownloadMatting(m: MattingModelInfo) {
@@ -184,16 +273,146 @@
     await loadProfileKey();
   }
 
+  function defaultComfyConfig(): ComfyWorkflowConfig {
+    return {
+      mode: 'builtin',
+      workflowName: '',
+      rawWorkflowJson: '',
+      positiveNodeId: '',
+      positiveField: '',
+      negativeNodeId: '',
+      negativeField: '',
+      imageNodeId: '',
+      secondaryImageNodeId: '',
+      latentNodeId: '',
+      seedNodeId: '',
+      denoiseStrength: 0.72
+    };
+  }
+
   async function updateActiveProfileField(
     field: 'name' | 'apiBase' | 'apiMode' | 'apiModel',
     val: string
   ) {
     if (!appStore.settings || !appStore.activeProfile) return;
-    const profiles = appStore.settings.profiles.map((p) =>
-      p.id === appStore.activeProfile!.id ? { ...p, [field]: val } : p
-    );
+    const profiles = appStore.settings.profiles.map((p) => {
+      if (p.id !== appStore.activeProfile!.id) return p;
+      const next = { ...p, [field]: val } as typeof p;
+      if (field === 'apiMode' && val === 'comfyui') {
+        if (!next.apiBase || next.apiBase === 'https://api.openai.com/v1') {
+          next.apiBase = 'http://127.0.0.1:8188';
+        }
+        if (!next.comfyConfig) {
+          next.comfyConfig = defaultComfyConfig();
+        }
+        next.hasKey = true;
+      }
+      return next;
+    });
     await appStore.saveSettings({ profiles });
     appStore.toast('ok', i18n.t('toast_profile_saved'));
+  }
+
+  async function updateComfyConfig(patch: Partial<ComfyWorkflowConfig>) {
+    if (!appStore.settings || !appStore.activeProfile) return;
+    const curProf = appStore.activeProfile;
+    const baseCfg = curProf.comfyConfig ?? defaultComfyConfig();
+    const nextCfg: ComfyWorkflowConfig = { ...baseCfg, ...patch };
+    const profiles = appStore.settings.profiles.map((p) =>
+      p.id === curProf.id ? { ...p, comfyConfig: nextCfg } : p
+    );
+    await appStore.saveSettings({ profiles });
+  }
+
+  async function handleImportComfyWorkflow(file: File) {
+    if (!appStore.activeProfile) return;
+    analyzingComfy = true;
+    try {
+      const isPng = file.name.toLowerCase().endsWith('.png') || file.type === 'image/png';
+      const rawContent = isPng
+        ? await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.onerror = () => reject(new Error('Failed to read PNG file'));
+            reader.readAsDataURL(file);
+          })
+        : await file.text();
+
+      const baseUrl = appStore.activeProfile.apiBase || 'http://127.0.0.1:8188';
+      const analysis = await api.analyzeComfyuiWorkflow(baseUrl, rawContent);
+      comfyAnalysis = analysis;
+
+      const curProf = appStore.activeProfile;
+      const baseCfg = curProf.comfyConfig ?? defaultComfyConfig();
+      const nextCfg: ComfyWorkflowConfig = {
+        ...baseCfg,
+        mode: 'custom',
+        workflowName: file.name,
+        rawWorkflowJson: analysis.normalizedApiJson,
+        positiveNodeId: analysis.suggestedPositiveNodeId,
+        positiveField: analysis.suggestedPositiveField,
+        negativeNodeId: analysis.suggestedNegativeNodeId,
+        negativeField: analysis.suggestedNegativeField,
+        imageNodeId: analysis.suggestedImageNodeId,
+        secondaryImageNodeId: analysis.suggestedSecondaryImageNodeId,
+        latentNodeId: analysis.suggestedLatentNodeId,
+        seedNodeId: analysis.suggestedSeedNodeId
+      };
+
+      const wfModelTag = `workflow:${file.name.replace(/\.(json|png)$/i, '')}`;
+      const nextModels = curProf.models.includes(wfModelTag)
+        ? curProf.models
+        : [wfModelTag, ...curProf.models];
+      const nextApiModel = curProf.apiModel || wfModelTag;
+
+      const profiles = appStore.settings!.profiles.map((p) =>
+        p.id === curProf.id
+          ? {
+              ...p,
+              comfyConfig: nextCfg,
+              models: nextModels,
+              apiModel: nextApiModel,
+              hasKey: true
+            }
+          : p
+      );
+      await appStore.saveSettings({ profiles });
+      appStore.toast('ok', `${i18n.t('comfy_toast_wf_loaded')} (${analysis.nodeCount} nodes)`);
+    } catch (e: any) {
+      appStore.toast('err', e?.details ? `${e.message} — ${e.details}` : String(e?.message || e));
+    } finally {
+      analyzingComfy = false;
+    }
+  }
+
+  async function handleReanalyzeComfyWorkflow() {
+    const prof = appStore.activeProfile;
+    if (!prof?.comfyConfig?.rawWorkflowJson) return;
+    analyzingComfy = true;
+    try {
+      const analysis = await api.analyzeComfyuiWorkflow(
+        prof.apiBase || 'http://127.0.0.1:8188',
+        prof.comfyConfig.rawWorkflowJson
+      );
+      comfyAnalysis = analysis;
+      await updateComfyConfig({
+        rawWorkflowJson: analysis.normalizedApiJson,
+        positiveNodeId: prof.comfyConfig.positiveNodeId || analysis.suggestedPositiveNodeId,
+        positiveField: prof.comfyConfig.positiveField || analysis.suggestedPositiveField,
+        negativeNodeId: prof.comfyConfig.negativeNodeId || analysis.suggestedNegativeNodeId,
+        negativeField: prof.comfyConfig.negativeField || analysis.suggestedNegativeField,
+        imageNodeId: prof.comfyConfig.imageNodeId || analysis.suggestedImageNodeId,
+        secondaryImageNodeId:
+          prof.comfyConfig.secondaryImageNodeId || analysis.suggestedSecondaryImageNodeId,
+        latentNodeId: prof.comfyConfig.latentNodeId || analysis.suggestedLatentNodeId,
+        seedNodeId: prof.comfyConfig.seedNodeId || analysis.suggestedSeedNodeId
+      });
+      appStore.toast('ok', `${i18n.t('comfy_toast_wf_loaded')} (${analysis.nodeCount} nodes)`);
+    } catch (e: any) {
+      appStore.toast('err', String(e?.message || e));
+    } finally {
+      analyzingComfy = false;
+    }
   }
 
   async function handleSaveKey() {
@@ -425,7 +644,46 @@
             </div>
           </button>
 
-          <!-- Tab 3: Appearance & Backup -->
+          <!-- Tab 3: AI Agent Hub (MCP & Skill) -->
+          <button
+            type="button"
+            onclick={() => {
+              appStore.settingsTab = 'agents';
+              loadAgentHub();
+            }}
+            class="flex items-start gap-3 rounded-xl border px-3.5 py-3 text-left transition-all {appStore.settingsTab ===
+            'agents'
+              ? 'border-accent bg-accent/15 text-fg shadow-sm'
+              : 'border-transparent bg-transparent text-fg-muted hover:border-line hover:bg-ink-2/60 hover:text-fg'}"
+          >
+            <div
+              class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg {appStore.settingsTab ===
+              'agents'
+                ? 'bg-accent text-accent-ink'
+                : 'bg-ink-2 text-fg-muted'}"
+            >
+              <Sparkles size={15} strokeWidth={2} />
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center justify-between gap-1.5">
+                <span class="truncate text-xs font-bold whitespace-nowrap">
+                  {i18n.t('settings_tab_agents')}
+                </span>
+                {#if agentHub}
+                  <span
+                    class="rounded bg-ink-0/80 px-1.5 py-0.5 font-mono text-[10px] font-bold text-accent"
+                  >
+                    {agentHub.agents.filter((a) => a.mcpInstalled && a.skillInstalled).length}/{agentHub.agents.length}
+                  </span>
+                {/if}
+              </div>
+              <p class="mt-0.5 line-clamp-2 text-[11px] leading-snug text-fg-muted">
+                {i18n.t('settings_tab_agents_sub')}
+              </p>
+            </div>
+          </button>
+
+          <!-- Tab 4: Appearance & Backup -->
           <button
             type="button"
             onclick={() => (appStore.settingsTab = 'system')}
@@ -563,6 +821,7 @@
                     >
                       <option value="images">{i18n.t('profile_mode_images')}</option>
                       <option value="chat">{i18n.t('profile_mode_chat')}</option>
+                      <option value="comfyui">{i18n.t('profile_mode_comfyui')}</option>
                     </select>
                   </div>
                 </div>
@@ -581,11 +840,296 @@
                         'apiBase',
                         (e.currentTarget as HTMLInputElement).value
                       )}
-                    placeholder="https://api.openai.com/v1"
+                    placeholder={appStore.activeProfile.apiMode === 'comfyui'
+                      ? 'http://127.0.0.1:8188'
+                      : 'https://api.openai.com/v1'}
                     spellcheck="false"
                     class="rounded-lg border border-line bg-ink-0 px-3.5 py-2 font-mono text-xs text-fg outline-none focus:border-accent"
                   />
                 </div>
+
+                {#if appStore.activeProfile.apiMode === 'comfyui'}
+                  {@const ccfg = appStore.activeProfile.comfyConfig ?? defaultComfyConfig()}
+                  <div class="flex flex-col gap-3.5 rounded-xl border border-accent/40 bg-accent/5 p-4">
+                    <div class="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <div class="flex items-center gap-2 text-xs font-bold text-fg">
+                          <Cpu size={14} class="text-accent" />
+                          <span>{i18n.t('comfy_panel_title')}</span>
+                        </div>
+                        <p class="mt-0.5 text-[11px] text-fg-muted">
+                          {i18n.t('comfy_panel_sub')}
+                        </p>
+                      </div>
+                    </div>
+
+                    <!-- Mode Switcher: Built-in vs Custom Workflow -->
+                    <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <button
+                        type="button"
+                        onclick={() => updateComfyConfig({ mode: 'builtin' })}
+                        class="flex flex-col gap-1 rounded-lg border px-3 py-2.5 text-left transition-all {ccfg.mode !==
+                        'custom'
+                          ? 'border-accent bg-accent/15 text-fg shadow-xs'
+                          : 'border-line bg-ink-0/70 text-fg-muted hover:border-line-strong hover:text-fg'}"
+                      >
+                        <span class="text-xs font-bold">{i18n.t('comfy_mode_builtin')}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onclick={() => updateComfyConfig({ mode: 'custom' })}
+                        class="flex flex-col gap-1 rounded-lg border px-3 py-2.5 text-left transition-all {ccfg.mode ===
+                        'custom'
+                          ? 'border-accent bg-accent/15 text-fg shadow-xs'
+                          : 'border-line bg-ink-0/70 text-fg-muted hover:border-line-strong hover:text-fg'}"
+                      >
+                        <span class="text-xs font-bold">{i18n.t('comfy_mode_custom')}</span>
+                      </button>
+                    </div>
+
+                    <!-- Denoise Slider for Sketch / Reference Img2Img -->
+                    <div class="flex items-center justify-between gap-4 rounded-lg border border-line bg-ink-0/70 px-3 py-2">
+                      <span class="text-xs font-medium text-fg-muted">
+                        {i18n.t('comfy_denoise_label')}
+                      </span>
+                      <div class="flex items-center gap-2.5">
+                        <input
+                          type="range"
+                          min="0.15"
+                          max="0.98"
+                          step="0.01"
+                          value={ccfg.denoiseStrength ?? 0.72}
+                          onchange={(e) =>
+                            updateComfyConfig({
+                              denoiseStrength: parseFloat(
+                                (e.currentTarget as HTMLInputElement).value
+                              )
+                            })}
+                          class="h-1.5 w-32 accent-accent"
+                        />
+                        <span class="w-10 text-right font-mono text-xs font-bold text-accent">
+                          {(ccfg.denoiseStrength ?? 0.72).toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {#if ccfg.mode !== 'custom'}
+                      <div class="rounded-lg border border-line bg-ink-0/60 px-3 py-2 text-[11px] leading-relaxed text-fg-muted">
+                        {i18n.t('comfy_builtin_hint')}
+                      </div>
+                    {:else}
+                      <!-- Custom Workflow Import & Visual Node Slot Mapper -->
+                      <div class="flex flex-col gap-3 rounded-lg border border-line bg-ink-0/80 p-3.5">
+                        <div class="flex flex-wrap items-center justify-between gap-2">
+                          <div class="min-w-0 flex-1">
+                            {#if ccfg.workflowName}
+                              <div class="flex items-center gap-2">
+                                <span class="truncate font-mono text-xs font-bold text-ok">
+                                  {i18n.t('comfy_workflow_loaded')}{ccfg.workflowName}
+                                </span>
+                                {#if comfyAnalysis}
+                                  <span class="rounded bg-ink-2 px-1.5 py-0.5 font-mono text-[10px] text-fg-muted">
+                                    {comfyAnalysis.nodeCount} nodes · {comfyAnalysis.format}
+                                  </span>
+                                {/if}
+                              </div>
+                            {:else}
+                              <div class="text-[11px] text-fg-muted">
+                                {i18n.t('comfy_workflow_empty')}
+                              </div>
+                            {/if}
+                          </div>
+
+                          <div class="flex items-center gap-2">
+                            <input
+                              bind:this={comfyWorkflowInputEl}
+                              type="file"
+                              accept=".json,.png,application/json,image/png"
+                              class="hidden"
+                              onchange={(e) => {
+                                const f = (e.currentTarget as HTMLInputElement).files?.[0];
+                                if (f) handleImportComfyWorkflow(f);
+                                (e.currentTarget as HTMLInputElement).value = '';
+                              }}
+                            />
+                            <button
+                              type="button"
+                              disabled={analyzingComfy}
+                              onclick={() => comfyWorkflowInputEl?.click()}
+                              class="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-bold text-accent-ink transition-colors hover:bg-accent-hover disabled:opacity-45"
+                            >
+                              <Upload size={13} />
+                              <span>{i18n.t('comfy_import_btn')}</span>
+                            </button>
+
+                            {#if ccfg.rawWorkflowJson}
+                              <button
+                                type="button"
+                                disabled={analyzingComfy}
+                                onclick={handleReanalyzeComfyWorkflow}
+                                class="flex items-center gap-1 rounded-lg border border-line bg-ink-1 px-2.5 py-1.5 text-xs font-medium text-fg-muted transition-colors hover:border-accent hover:text-fg disabled:opacity-45"
+                              >
+                                <RefreshCw size={12} class={analyzingComfy ? 'animate-spin' : ''} />
+                                <span>{i18n.t('comfy_reanalyze_btn')}</span>
+                              </button>
+                            {/if}
+                          </div>
+                        </div>
+
+                        {#if comfyAnalysis}
+                          <div class="grid grid-cols-1 gap-3 border-t border-line pt-3 sm:grid-cols-2">
+                            <!-- 1. Positive Prompt Slot -->
+                            <div class="flex flex-col gap-1">
+                              <label for="comfyPosNode" class="text-[11px] font-semibold text-fg-muted">
+                                {i18n.t('comfy_slot_pos_label')}
+                              </label>
+                              <select
+                                id="comfyPosNode"
+                                value={ccfg.positiveNodeId}
+                                onchange={(e) => {
+                                  const nid = (e.currentTarget as HTMLSelectElement).value;
+                                  const found = comfyAnalysis?.textNodes.find((n) => n.nodeId === nid);
+                                  updateComfyConfig({
+                                    positiveNodeId: nid,
+                                    positiveField: found?.field ?? 'text'
+                                  });
+                                }}
+                                class="rounded-lg border border-line bg-ink-1 px-2.5 py-1.5 font-mono text-[11px] text-fg outline-none focus:border-accent"
+                              >
+                                <option value="">{i18n.t('comfy_slot_auto')}</option>
+                                {#each comfyAnalysis.textNodes as tn (tn.nodeId + ':' + tn.field)}
+                                  <option value={tn.nodeId}>
+                                    #{tn.nodeId} [{tn.classType}] {tn.title} — {tn.preview || '(empty)'}
+                                  </option>
+                                {/each}
+                              </select>
+                            </div>
+
+                            <!-- 2. Negative Prompt Slot -->
+                            <div class="flex flex-col gap-1">
+                              <label for="comfyNegNode" class="text-[11px] font-semibold text-fg-muted">
+                                {i18n.t('comfy_slot_neg_label')}
+                              </label>
+                              <select
+                                id="comfyNegNode"
+                                value={ccfg.negativeNodeId}
+                                onchange={(e) => {
+                                  const nid = (e.currentTarget as HTMLSelectElement).value;
+                                  const found = comfyAnalysis?.textNodes.find((n) => n.nodeId === nid);
+                                  updateComfyConfig({
+                                    negativeNodeId: nid,
+                                    negativeField: found?.field ?? 'text'
+                                  });
+                                }}
+                                class="rounded-lg border border-line bg-ink-1 px-2.5 py-1.5 font-mono text-[11px] text-fg outline-none focus:border-accent"
+                              >
+                                <option value="">{i18n.t('comfy_slot_auto')}</option>
+                                {#each comfyAnalysis.textNodes as tn (tn.nodeId + ':' + tn.field)}
+                                  <option value={tn.nodeId}>
+                                    #{tn.nodeId} [{tn.classType}] {tn.title} — {tn.preview || '(empty)'}
+                                  </option>
+                                {/each}
+                              </select>
+                            </div>
+
+                            <!-- 3. Primary Reference / Sketch Image Slot -->
+                            <div class="flex flex-col gap-1">
+                              <label for="comfyImgNode" class="text-[11px] font-semibold text-fg-muted">
+                                {i18n.t('comfy_slot_img_label')}
+                              </label>
+                              <select
+                                id="comfyImgNode"
+                                value={ccfg.imageNodeId}
+                                onchange={(e) =>
+                                  updateComfyConfig({
+                                    imageNodeId: (e.currentTarget as HTMLSelectElement).value
+                                  })}
+                                class="rounded-lg border border-line bg-ink-1 px-2.5 py-1.5 font-mono text-[11px] text-fg outline-none focus:border-accent"
+                              >
+                                <option value="">{i18n.t('comfy_slot_auto')}</option>
+                                {#each comfyAnalysis.imageNodes as imn (imn.nodeId)}
+                                  <option value={imn.nodeId}>
+                                    #{imn.nodeId} [{imn.classType}] {imn.title} ({imn.preview})
+                                  </option>
+                                {/each}
+                              </select>
+                            </div>
+
+                            <!-- 4. Secondary Reference / Mask Slot -->
+                            <div class="flex flex-col gap-1">
+                              <label for="comfySecImgNode" class="text-[11px] font-semibold text-fg-muted">
+                                {i18n.t('comfy_slot_sec_img_label')}
+                              </label>
+                              <select
+                                id="comfySecImgNode"
+                                value={ccfg.secondaryImageNodeId}
+                                onchange={(e) =>
+                                  updateComfyConfig({
+                                    secondaryImageNodeId: (e.currentTarget as HTMLSelectElement).value
+                                  })}
+                                class="rounded-lg border border-line bg-ink-1 px-2.5 py-1.5 font-mono text-[11px] text-fg outline-none focus:border-accent"
+                              >
+                                <option value="">{i18n.t('comfy_slot_auto')}</option>
+                                {#each comfyAnalysis.imageNodes as imn (imn.nodeId)}
+                                  <option value={imn.nodeId}>
+                                    #{imn.nodeId} [{imn.classType}] {imn.title} ({imn.preview})
+                                  </option>
+                                {/each}
+                              </select>
+                            </div>
+
+                            <!-- 5. Latent Size Slot -->
+                            <div class="flex flex-col gap-1">
+                              <label for="comfyLatentNode" class="text-[11px] font-semibold text-fg-muted">
+                                {i18n.t('comfy_slot_latent_label')}
+                              </label>
+                              <select
+                                id="comfyLatentNode"
+                                value={ccfg.latentNodeId}
+                                onchange={(e) =>
+                                  updateComfyConfig({
+                                    latentNodeId: (e.currentTarget as HTMLSelectElement).value
+                                  })}
+                                class="rounded-lg border border-line bg-ink-1 px-2.5 py-1.5 font-mono text-[11px] text-fg outline-none focus:border-accent"
+                              >
+                                <option value="">{i18n.t('comfy_slot_auto')}</option>
+                                {#each comfyAnalysis.latentNodes as ln (ln.nodeId)}
+                                  <option value={ln.nodeId}>
+                                    #{ln.nodeId} [{ln.classType}] {ln.title} ({ln.preview})
+                                  </option>
+                                {/each}
+                              </select>
+                            </div>
+
+                            <!-- 6. Seed Slot -->
+                            <div class="flex flex-col gap-1">
+                              <label for="comfySeedNode" class="text-[11px] font-semibold text-fg-muted">
+                                {i18n.t('comfy_slot_seed_label')}
+                              </label>
+                              <select
+                                id="comfySeedNode"
+                                value={ccfg.seedNodeId}
+                                onchange={(e) =>
+                                  updateComfyConfig({
+                                    seedNodeId: (e.currentTarget as HTMLSelectElement).value
+                                  })}
+                                class="rounded-lg border border-line bg-ink-1 px-2.5 py-1.5 font-mono text-[11px] text-fg outline-none focus:border-accent"
+                              >
+                                <option value="">{i18n.t('comfy_slot_auto')}</option>
+                                {#each comfyAnalysis.seedNodes as sn (sn.nodeId)}
+                                  <option value={sn.nodeId}>
+                                    #{sn.nodeId} [{sn.classType}] {sn.title} (seed={sn.preview})
+                                  </option>
+                                {/each}
+                              </select>
+                            </div>
+                          </div>
+                        {/if}
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
 
                 <!-- API Key Vault (Password Input + Eye Toggle + One-Click Copy + Save) -->
                 <div class="flex flex-col gap-1.5">
@@ -1084,7 +1628,7 @@
                     <Info size={14} class="text-accent" />
                     <span>{i18n.t('about_app_title')}</span>
                     <span class="rounded-md bg-ink-2 px-2 py-0.5 font-mono text-[11px] font-bold text-accent">
-                      v0.2.0
+                      v{appVersion}
                     </span>
                     {#if updateInfo}
                       {#if updateInfo.hasUpdate}
@@ -1131,6 +1675,298 @@
                   </button>
                 </div>
               </div>
+            </div>
+          {:else if appStore.settingsTab === 'agents'}
+            <div class="flex flex-col gap-5">
+              <!-- Top Overview Banner -->
+              <div
+                class="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-line bg-ink-1 p-5"
+              >
+                <div class="max-w-2xl">
+                  <div class="flex items-center gap-2">
+                    <Sparkles size={16} class="text-accent" />
+                    <h3 class="text-sm font-bold text-fg">
+                      {i18n.t('agent_hub_title')}
+                    </h3>
+                  </div>
+                  <p class="mt-1 text-xs leading-relaxed text-fg-muted">
+                    {i18n.t('agent_hub_sub')}
+                  </p>
+                </div>
+
+                <div class="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={busyAgentId !== null}
+                    onclick={() => handleInstallAgent('all')}
+                    class="flex shrink-0 items-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-xs font-bold whitespace-nowrap text-accent-ink shadow-sm transition-opacity hover:opacity-90 disabled:opacity-50"
+                  >
+                    {#if busyAgentId === 'all'}
+                      <Loader2 size={14} class="animate-spin" />
+                    {:else}
+                      <Sparkles size={14} />
+                    {/if}
+                    <span>{i18n.t('agent_install_all_btn')}</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Section 1: One-Click Install for Popular Agents -->
+              <div class="flex flex-col gap-3 rounded-2xl border border-line bg-ink-1 p-5">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-bold text-fg">
+                    {i18n.t('agent_oneclick_section')}
+                  </span>
+                  <button
+                    type="button"
+                    onclick={loadAgentHub}
+                    class="flex items-center gap-1 rounded-lg border border-line bg-ink-2 px-2.5 py-1 text-[11px] font-semibold text-fg-muted hover:border-accent hover:text-fg"
+                  >
+                    <RefreshCw size={12} />
+                    <span>{i18n.t('studio_refresh')}</span>
+                  </button>
+                </div>
+
+                {#if agentHub}
+                  <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    {#each agentHub.agents as agent (agent.id)}
+                      {@const isReady = agent.mcpInstalled && agent.skillInstalled}
+                      {@const isPartial = !isReady && (agent.mcpInstalled || agent.skillInstalled)}
+                      <div
+                        class="flex flex-col justify-between gap-3 rounded-xl border p-4 transition-all {isReady
+                          ? 'border-ok/40 bg-ok/5'
+                          : 'border-line bg-ink-0/60'}"
+                      >
+                        <div class="flex flex-col gap-1.5">
+                          <div class="flex flex-wrap items-center justify-between gap-2">
+                            <div class="flex items-center gap-2">
+                              <span class="text-xs font-bold text-fg">{agent.name}</span>
+                              <span
+                                class="rounded bg-ink-2 px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
+                              >
+                                {agent.vendor}
+                              </span>
+                            </div>
+
+                            <div class="flex items-center gap-1.5">
+                              {#if agent.detected}
+                                <span
+                                  class="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-semibold text-accent"
+                                >
+                                  {i18n.t('agent_detected_badge')}
+                                </span>
+                              {:else}
+                                <span
+                                  class="rounded bg-ink-2 px-1.5 py-0.5 text-[10px] text-fg-muted"
+                                >
+                                  {i18n.t('agent_not_detected_badge')}
+                                </span>
+                              {/if}
+
+                              {#if isReady}
+                                <span
+                                  class="flex items-center gap-1 rounded bg-ok/20 px-2 py-0.5 text-[10px] font-bold text-ok"
+                                >
+                                  <Check size={11} />
+                                  {i18n.t('agent_status_ready')}
+                                </span>
+                              {:else if isPartial}
+                                <span
+                                  class="rounded bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-400"
+                                >
+                                  {i18n.t('agent_status_partial')}
+                                </span>
+                              {:else}
+                                <span
+                                  class="rounded bg-ink-2 px-2 py-0.5 text-[10px] text-fg-muted"
+                                >
+                                  {i18n.t('agent_status_uninstalled')}
+                                </span>
+                              {/if}
+                            </div>
+                          </div>
+
+                          <div
+                            class="mt-1 flex flex-col gap-1 rounded-lg bg-ink-1/90 p-2 font-mono text-[10px] text-fg-muted"
+                          >
+                            <div class="truncate" title={agent.mcpConfigPath}>
+                              <span class="font-bold text-fg">MCP:</span>
+                              {agent.mcpConfigPath}
+                            </div>
+                            <div class="truncate" title={agent.skillPath}>
+                              <span class="font-bold text-fg">Skill:</span>
+                              {agent.skillPath}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div class="flex items-center justify-end gap-2 pt-1">
+                          {#if agent.mcpInstalled || agent.skillInstalled}
+                            <button
+                              type="button"
+                              disabled={busyAgentId !== null}
+                              onclick={() => handleUninstallAgent(agent.id)}
+                              class="flex items-center gap-1 rounded-lg border border-line bg-ink-2 px-2.5 py-1.5 text-[11px] font-semibold text-fg-muted hover:border-red-500/50 hover:text-red-400 disabled:opacity-50"
+                            >
+                              <Trash2 size={12} />
+                              <span>{i18n.t('agent_btn_uninstall')}</span>
+                            </button>
+                          {/if}
+                          <button
+                            type="button"
+                            disabled={busyAgentId !== null}
+                            onclick={() => handleInstallAgent(agent.id)}
+                            class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-bold transition-all disabled:opacity-50 {isReady
+                              ? 'border border-line bg-ink-2 text-fg hover:border-accent'
+                              : 'bg-accent text-accent-ink hover:opacity-90'}"
+                          >
+                            {#if busyAgentId === agent.id}
+                              <Loader2 size={12} class="animate-spin" />
+                            {:else}
+                              <Download size={12} />
+                            {/if}
+                            <span>
+                              {isReady
+                                ? i18n.t('agent_btn_reinstall')
+                                : i18n.t('agent_btn_install')}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+
+              <!-- Section 2: Manual Installation & Export for Any Other Agent -->
+              {#if agentHub}
+                <div class="flex flex-col gap-4 rounded-2xl border border-line bg-ink-1 p-5">
+                  <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div class="text-xs font-bold text-fg">
+                        {i18n.t('agent_manual_section')}
+                      </div>
+                      <p class="mt-0.5 text-xs text-fg-muted">
+                        {i18n.t('agent_manual_sub')}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onclick={handleExportAgentBundle}
+                      class="flex shrink-0 items-center gap-1.5 rounded-xl border border-accent/50 bg-accent/10 px-3.5 py-2 text-xs font-bold whitespace-nowrap text-accent hover:bg-accent/20"
+                    >
+                      <FolderOpen size={14} />
+                      <span>{i18n.t('agent_export_bundle_btn')}</span>
+                    </button>
+                  </div>
+
+                  <!-- Local Executable Path Bar -->
+                  <div
+                    class="flex items-center justify-between gap-2 rounded-xl border border-line bg-ink-0 px-3.5 py-2.5"
+                  >
+                    <div class="min-w-0 flex-1">
+                      <div class="text-[10px] font-semibold text-fg-muted">
+                        {i18n.t('agent_bin_path_label')}
+                      </div>
+                      <div class="truncate font-mono text-xs text-fg">
+                        {agentHub.mcpExePath}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onclick={() => copySnippet(agentHub?.mcpExePath ?? '')}
+                      class="flex shrink-0 items-center gap-1 rounded-lg border border-line bg-ink-2 px-2.5 py-1.5 text-xs font-semibold text-fg hover:border-accent"
+                    >
+                      <Copy size={13} />
+                    </button>
+                  </div>
+
+                  <!-- Snippet Switcher & Copy Bar -->
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div class="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onclick={() => (activeSnippetTab = 'json')}
+                        class="rounded-lg px-3 py-1.5 text-xs font-bold transition-all {activeSnippetTab ===
+                        'json'
+                          ? 'bg-accent text-accent-ink'
+                          : 'bg-ink-2 text-fg-muted hover:text-fg'}"
+                      >
+                        MCP JSON
+                      </button>
+                      <button
+                        type="button"
+                        onclick={() => (activeSnippetTab = 'toml')}
+                        class="rounded-lg px-3 py-1.5 text-xs font-bold transition-all {activeSnippetTab ===
+                        'toml'
+                          ? 'bg-accent text-accent-ink'
+                          : 'bg-ink-2 text-fg-muted hover:text-fg'}"
+                      >
+                        Codex TOML
+                      </button>
+                      <button
+                        type="button"
+                        onclick={() => (activeSnippetTab = 'cli')}
+                        class="rounded-lg px-3 py-1.5 text-xs font-bold transition-all {activeSnippetTab ===
+                        'cli'
+                          ? 'bg-accent text-accent-ink'
+                          : 'bg-ink-2 text-fg-muted hover:text-fg'}"
+                      >
+                        CLI Command
+                      </button>
+                      <button
+                        type="button"
+                        onclick={() => (activeSnippetTab = 'skill')}
+                        class="rounded-lg px-3 py-1.5 text-xs font-bold transition-all {activeSnippetTab ===
+                        'skill'
+                          ? 'bg-accent text-accent-ink'
+                          : 'bg-ink-2 text-fg-muted hover:text-fg'}"
+                      >
+                        SKILL.md
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onclick={() => {
+                        if (!agentHub) return;
+                        const txt =
+                          activeSnippetTab === 'json'
+                            ? agentHub.mcpJsonSnippet
+                            : activeSnippetTab === 'toml'
+                              ? agentHub.codexTomlSnippet
+                              : activeSnippetTab === 'cli'
+                                ? agentHub.cliExampleSnippet
+                                : agentHub.skillMarkdown;
+                        copySnippet(txt);
+                      }}
+                      class="flex items-center gap-1.5 rounded-lg border border-line bg-ink-2 px-3 py-1.5 text-xs font-bold text-fg hover:border-accent"
+                    >
+                      <Copy size={13} />
+                      <span>
+                        {activeSnippetTab === 'json'
+                          ? i18n.t('agent_copy_mcp_json')
+                          : activeSnippetTab === 'toml'
+                            ? i18n.t('agent_copy_codex_toml')
+                            : activeSnippetTab === 'cli'
+                              ? i18n.t('agent_copy_cli_cmd')
+                              : i18n.t('agent_copy_skill_md')}
+                      </span>
+                    </button>
+                  </div>
+
+                  <pre
+                    class="max-h-60 overflow-auto rounded-xl border border-line bg-ink-0 p-3.5 font-mono text-[11px] leading-relaxed text-fg-muted">{activeSnippetTab ===
+                    'json'
+                      ? agentHub.mcpJsonSnippet
+                      : activeSnippetTab === 'toml'
+                        ? agentHub.codexTomlSnippet
+                        : activeSnippetTab === 'cli'
+                          ? agentHub.cliExampleSnippet
+                          : agentHub.skillMarkdown}</pre>
+                </div>
+              {/if}
             </div>
           {/if}
         </div>

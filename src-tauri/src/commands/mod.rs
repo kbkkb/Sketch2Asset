@@ -12,9 +12,10 @@ use crate::state::{AppSettings, AppState, ProviderProfile};
 
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> AppResult<AppSettings> {
+    state.reload_settings_from_disk();
     let mut guard = state.settings.lock().unwrap();
     for prof in &mut guard.profiles {
-        prof.has_key = state.secrets.has_key(&prof.id);
+        prof.has_key = state.secrets.has_key(&prof.id) || prof.api_mode == "comfyui";
     }
     Ok(guard.clone())
 }
@@ -28,7 +29,7 @@ pub fn save_settings(state: State<'_, AppState>, mut new_settings: AppSettings) 
         ));
     }
     for prof in &mut new_settings.profiles {
-        prof.has_key = state.secrets.has_key(&prof.id);
+        prof.has_key = state.secrets.has_key(&prof.id) || prof.api_mode == "comfyui";
     }
     {
         let mut guard = state.settings.lock().unwrap();
@@ -76,30 +77,66 @@ pub async fn fetch_provider_models(
     api_base: String,
     api_key_override: Option<String>,
 ) -> AppResult<Vec<String>> {
-    let key = match api_key_override.filter(|s| !s.trim().is_empty()) {
-        Some(k) => {
-            state.secrets.set_key(&profile_id, &k);
-            k
-        }
-        None => state.secrets.get_key(&profile_id).ok_or_else(|| {
-            AppError::new(AppErrorCode::MissingApiKey, "API Key not configured for this profile")
-        })?,
+    let api_mode = {
+        let guard = state.settings.lock().unwrap();
+        guard
+            .profiles
+            .iter()
+            .find(|p| p.id == profile_id)
+            .map(|p| p.api_mode.clone())
+            .unwrap_or_else(|| "images".to_string())
     };
 
-    let models = providers::fetch_models(&state.http, &api_base, &key).await?;
+    let models = if api_mode == "comfyui" {
+        let opt_key = match api_key_override.filter(|s| !s.trim().is_empty()) {
+            Some(k) => {
+                state.secrets.set_key(&profile_id, &k);
+                Some(k)
+            }
+            None => state.secrets.get_key(&profile_id),
+        };
+        providers::comfyui::fetch_comfy_models(&state.http, &api_base, opt_key.as_deref()).await?
+    } else {
+        let key = match api_key_override.filter(|s| !s.trim().is_empty()) {
+            Some(k) => {
+                state.secrets.set_key(&profile_id, &k);
+                k
+            }
+            None => state.secrets.get_key(&profile_id).ok_or_else(|| {
+                AppError::new(AppErrorCode::MissingApiKey, "API Key not configured for this profile")
+            })?,
+        };
+        providers::fetch_models(&state.http, &api_base, &key).await?
+    };
 
     {
         let mut guard = state.settings.lock().unwrap();
         if let Some(p) = guard.profiles.iter_mut().find(|p| p.id == profile_id) {
             p.api_base = api_base;
             p.fetched_models = models.clone();
-            if p.models.is_empty() && !p.api_model.trim().is_empty() {
-                p.models.push(p.api_model.clone());
+            if p.models.is_empty() {
+                if !p.api_model.trim().is_empty() {
+                    p.models.push(p.api_model.clone());
+                } else if api_mode == "comfyui" {
+                    if let Some(first) = models.first() {
+                        p.models.push(first.clone());
+                        p.api_model = first.clone();
+                    }
+                }
             }
         }
     }
     state.persist_settings()?;
     Ok(models)
+}
+
+#[tauri::command]
+pub async fn analyze_comfyui_workflow(
+    state: State<'_, AppState>,
+    api_base: String,
+    raw_content: String,
+) -> AppResult<providers::comfyui::ComfyWorkflowAnalysis> {
+    providers::comfyui::analyze_comfy_workflow(&state.http, &api_base, &raw_content).await
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -137,7 +174,7 @@ pub async fn generate_assets(
 ) -> AppResult<GenerateResponse> {
     let start_ts = std::time::Instant::now();
 
-    let (api_base, api_mode, model) = {
+    let (api_base, api_mode, model, comfy_cfg) = {
         let guard = state.settings.lock().unwrap();
         let prof = guard
             .profiles
@@ -149,15 +186,22 @@ pub async fn generate_assets(
         } else {
             payload.model.trim().to_string()
         };
-        (prof.api_base.clone(), prof.api_mode.clone(), m)
+        (
+            prof.api_base.clone(),
+            prof.api_mode.clone(),
+            m,
+            prof.comfy_config.clone(),
+        )
     };
 
-    let api_key = state.secrets.get_key(&payload.profile_id).ok_or_else(|| {
-        AppError::new(
+    let opt_key = state.secrets.get_key(&payload.profile_id);
+    if api_mode != "comfyui" && opt_key.is_none() {
+        return Err(AppError::new(
             AppErrorCode::MissingApiKey,
             "Please configure the API Key for the active profile first",
-        )
-    })?;
+        ));
+    }
+    let api_key = opt_key.unwrap_or_default();
 
     // Resolve optional sketch input
     let sketch_bytes = resolve_sketch_input(&payload)?;
@@ -169,7 +213,21 @@ pub async fn generate_assets(
     let mut created_assets = Vec::new();
 
     for _ in 0..batch_count {
-        let (img_bytes, via) = if api_mode == "chat" {
+        let (img_bytes, via) = if api_mode == "comfyui" {
+            providers::comfyui::generate_via_comfyui(
+                &state.http,
+                &api_base,
+                if api_key.is_empty() { None } else { Some(&api_key) },
+                &model,
+                &final_prompt,
+                &payload.negative_prompt,
+                &payload.size,
+                sketch_bytes.clone(),
+                None,
+                comfy_cfg.as_ref(),
+            )
+            .await?
+        } else if api_mode == "chat" {
             providers::generate_via_chat(
                 &state.http,
                 &api_base,
@@ -211,7 +269,7 @@ pub async fn generate_assets(
     })
 }
 
-fn assemble_game_asset_prompt(p: &GeneratePayload, has_sketch: bool) -> String {
+pub(crate) fn assemble_game_asset_prompt(p: &GeneratePayload, has_sketch: bool) -> String {
     let mut parts = Vec::new();
     if has_sketch {
         parts.push("Based on the provided reference/sketch composition and silhouette, render a high-quality game asset:".to_string());
@@ -229,7 +287,13 @@ fn assemble_game_asset_prompt(p: &GeneratePayload, has_sketch: bool) -> String {
         parts.push(format!("Project visual style rules: {}", p.project_style_prompt.trim()));
     }
     if !p.background_prompt.trim().is_empty() {
-        parts.push(p.background_prompt.trim().to_string());
+        let bg = p.background_prompt.trim();
+        let bg_upper = bg.to_ascii_uppercase();
+        if bg_upper.starts_with("CRITICAL BACKGROUND") || bg_upper.starts_with("BACKGROUND RULE") {
+            parts.push(bg.to_string());
+        } else {
+            parts.push(format!("CRITICAL BACKGROUND RULE: {}", bg));
+        }
     }
     if let Some((w, h)) = providers::parse_size_dims(&p.size) {
         let ratio = w as f64 / h as f64;
@@ -255,25 +319,44 @@ fn assemble_game_asset_prompt(p: &GeneratePayload, has_sketch: bool) -> String {
     parts.join("\n\n")
 }
 
-fn resolve_sketch_input(p: &GeneratePayload) -> AppResult<Option<(Vec<u8>, String)>> {
-    if let Some(path_str) = p.sketch_path.as_ref().filter(|s| !s.trim().is_empty()) {
+pub(crate) fn resolve_sketch_input(p: &GeneratePayload) -> AppResult<Option<(Vec<u8>, String)>> {
+    if let Some(path_str) = p
+        .sketch_path
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
         let path = PathBuf::from(path_str);
-        if path.exists() {
-            let bytes = fs::read(&path)?;
-            let mime = match path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|s| s.to_lowercase())
-                .as_deref()
-            {
-                Some("jpg" | "jpeg") => "image/jpeg",
-                Some("webp") => "image/webp",
-                _ => "image/png",
-            };
-            return Ok(Some((bytes, mime.to_string())));
+        if !path.exists() {
+            return Err(AppError::new(
+                AppErrorCode::NotFound,
+                format!("Sketch/reference image not found: {}", path_str),
+            ));
         }
+        let bytes = fs::read(&path).map_err(|e| {
+            AppError::new(
+                AppErrorCode::NotFound,
+                format!("Failed to read sketch/reference image '{}': {}", path_str, e),
+            )
+        })?;
+        let mime = match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase())
+            .as_deref()
+        {
+            Some("jpg" | "jpeg") => "image/jpeg",
+            Some("webp") => "image/webp",
+            _ => "image/png",
+        };
+        return Ok(Some((bytes, mime.to_string())));
     }
-    if let Some(data_url) = p.sketch_data_url.as_ref().filter(|s| !s.trim().is_empty()) {
+    if let Some(data_url) = p
+        .sketch_data_url
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
         if let Some(idx) = data_url.find(";base64,") {
             let mime = data_url[..idx]
                 .strip_prefix("data:")
@@ -284,12 +367,17 @@ fn resolve_sketch_input(p: &GeneratePayload) -> AppResult<Option<(Vec<u8>, Strin
                 .decode(raw_b64.trim())
                 .map_err(|e| AppError::new(AppErrorCode::InvalidInput, e.to_string()))?;
             return Ok(Some((bytes, mime)));
+        } else {
+            return Err(AppError::new(
+                AppErrorCode::InvalidInput,
+                "Invalid sketch_data_url format: expected 'data:<mime>;base64,...'",
+            ));
         }
     }
     Ok(None)
 }
 
-fn fit_image_to_target_size(img: image::DynamicImage, target_w: u32, target_h: u32) -> image::DynamicImage {
+pub(crate) fn fit_image_to_target_size(img: image::DynamicImage, target_w: u32, target_h: u32) -> image::DynamicImage {
     use image::{ GenericImageView, RgbaImage, imageops::FilterType };
     let sw = img.width();
     let sh = img.height();
@@ -315,7 +403,7 @@ fn fit_image_to_target_size(img: image::DynamicImage, target_w: u32, target_h: u
     image::DynamicImage::ImageRgba8(canvas)
 }
 
-fn save_generated_image(
+pub(crate) fn save_generated_image(
     state: &AppState,
     raw_bytes: &[u8],
     project: &str,
@@ -525,6 +613,7 @@ pub fn export_config_bundle(state: State<'_, AppState>) -> AppResult<String> {
             "apiMode": p.api_mode,
             "apiModel": p.api_model,
             "models": p.models,
+            "comfyConfig": p.comfy_config,
         }));
     }
     let bundle = serde_json::json!({
@@ -583,11 +672,14 @@ pub fn import_config_bundle(state: State<'_, AppState>, raw_json: String) -> App
             if !api_key.is_empty() {
                 state.secrets.set_key(&new_id, api_key);
             }
+            let comfy_config = item
+                .get("comfyConfig")
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
             guard.profiles.push(ProviderProfile {
                 id: new_id,
                 name,
                 api_base,
-                api_mode,
+                api_mode: api_mode.clone(),
                 api_model: api_model.clone(),
                 models: if models.len() > 8 {
                     vec![api_model]
@@ -595,7 +687,8 @@ pub fn import_config_bundle(state: State<'_, AppState>, raw_json: String) -> App
                     models.clone()
                 },
                 fetched_models: models,
-                has_key: !api_key.is_empty(),
+                has_key: !api_key.is_empty() || api_mode == "comfyui",
+                comfy_config,
             });
         }
     }
@@ -918,7 +1011,7 @@ pub async fn run_studio_region_edit(
         ));
     }
 
-    let (api_base, api_mode, model) = {
+    let (api_base, api_mode, model, comfy_cfg) = {
         let guard = state.settings.lock().unwrap();
         let prof = guard
             .profiles
@@ -930,15 +1023,22 @@ pub async fn run_studio_region_edit(
         } else {
             payload.model.trim().to_string()
         };
-        (prof.api_base.clone(), prof.api_mode.clone(), m)
+        (
+            prof.api_base.clone(),
+            prof.api_mode.clone(),
+            m,
+            prof.comfy_config.clone(),
+        )
     };
 
-    let api_key = state.secrets.get_key(&payload.profile_id).ok_or_else(|| {
-        AppError::new(
+    let opt_key = state.secrets.get_key(&payload.profile_id);
+    if api_mode != "comfyui" && opt_key.is_none() {
+        return Err(AppError::new(
             AppErrorCode::MissingApiKey,
             "Please configure the API Key for the active profile first",
-        )
-    })?;
+        ));
+    }
+    let api_key = opt_key.unwrap_or_default();
 
     let orig_bytes = decode_data_url_bytes(&payload.original_data_url)?;
     let guide_bytes = payload
@@ -992,7 +1092,25 @@ pub async fn run_studio_region_edit(
         payload.size.trim().to_string()
     };
 
-    let (out_bytes, via) = if api_mode == "chat" && payload.mode != "mask_edit" {
+    let (out_bytes, via) = if api_mode == "comfyui" {
+        providers::comfyui::generate_via_comfyui(
+            &state.http,
+            &api_base,
+            if api_key.is_empty() { None } else { Some(&api_key) },
+            &model,
+            &prompt,
+            "",
+            &size,
+            Some((orig_bytes, "image/png".to_string())),
+            if payload.mode == "mask_edit" {
+                mask_bytes
+            } else {
+                guide_bytes
+            },
+            comfy_cfg.as_ref(),
+        )
+        .await?
+    } else if api_mode == "chat" && payload.mode != "mask_edit" {
         providers::edit_regions_via_chat(
             &state.http,
             &api_base,
@@ -1073,7 +1191,7 @@ pub async fn generate_character_asset(
 ) -> AppResult<CharacterGenerateResponse> {
     let start_ts = std::time::Instant::now();
 
-    let (api_base, api_mode, model) = {
+    let (api_base, api_mode, model, comfy_cfg) = {
         let guard = state.settings.lock().unwrap();
         let prof = guard
             .profiles
@@ -1085,15 +1203,22 @@ pub async fn generate_character_asset(
         } else {
             payload.model.trim().to_string()
         };
-        (prof.api_base.clone(), prof.api_mode.clone(), m)
+        (
+            prof.api_base.clone(),
+            prof.api_mode.clone(),
+            m,
+            prof.comfy_config.clone(),
+        )
     };
 
-    let api_key = state.secrets.get_key(&payload.profile_id).ok_or_else(|| {
-        AppError::new(
+    let opt_key = state.secrets.get_key(&payload.profile_id);
+    if api_mode != "comfyui" && opt_key.is_none() {
+        return Err(AppError::new(
             AppErrorCode::MissingApiKey,
             "Please configure the API Key for the active profile first",
-        )
-    })?;
+        ));
+    }
+    let api_key = opt_key.unwrap_or_default();
 
     let anchor_bytes = payload
         .anchor_data_url
@@ -1119,7 +1244,7 @@ pub async fn generate_character_asset(
         prompt_parts.push(payload.style_prompt.trim().to_string());
     }
     prompt_parts.push(
-        "CRITICAL BACKGROUND RULE: Pure solid studio white background (#FFFFFF) only, no ground cast shadow, no backdrop gradients, no text labels or watermarks.".to_string(),
+        "CRITICAL BACKGROUND RULE: Pure solid flat studio white background (#FFFFFF) only, completely uniform with zero vignette, zero backdrop gradients, zero floor plane, zero ground cast shadow, and no text labels or watermarks.".to_string(),
     );
     if !payload.negative_prompt.trim().is_empty() {
         prompt_parts.push(format!(
@@ -1135,7 +1260,21 @@ pub async fn generate_character_asset(
         payload.size.trim().to_string()
     };
 
-    let (raw_bytes, via) = if let Some(anchor) = anchor_bytes {
+    let (raw_bytes, via) = if api_mode == "comfyui" {
+        providers::comfyui::generate_via_comfyui(
+            &state.http,
+            &api_base,
+            if api_key.is_empty() { None } else { Some(&api_key) },
+            &model,
+            &final_prompt,
+            &payload.negative_prompt,
+            &size,
+            anchor_bytes,
+            secondary_bytes,
+            comfy_cfg.as_ref(),
+        )
+        .await?
+    } else if let Some(anchor) = anchor_bytes {
         if secondary_bytes.is_some() {
             // Dual-reference mode (Identity Anchor + Outfit/Pose Reference)
             if api_mode == "chat" {
@@ -1312,4 +1451,125 @@ pub async fn check_app_update(state: State<'_, AppState>) -> AppResult<AppUpdate
         release_notes,
         published_at,
     })
+}
+
+#[tauri::command]
+pub fn get_agent_hub_status(
+    state: State<'_, AppState>,
+) -> AppResult<crate::mcp::installer::AgentHubStatus> {
+    crate::mcp::installer::get_hub_status(&state.app_data_dir)
+}
+
+#[tauri::command]
+pub fn install_agent_integration(
+    state: State<'_, AppState>,
+    agent_id: String,
+) -> AppResult<crate::mcp::installer::AgentHubStatus> {
+    crate::mcp::installer::install_for_agent(&state.app_data_dir, &agent_id)
+}
+
+#[tauri::command]
+pub fn uninstall_agent_integration(
+    state: State<'_, AppState>,
+    agent_id: String,
+) -> AppResult<crate::mcp::installer::AgentHubStatus> {
+    crate::mcp::installer::uninstall_for_agent(&state.app_data_dir, &agent_id)
+}
+
+#[tauri::command]
+pub fn export_agent_skill_bundle(
+    state: State<'_, AppState>,
+    reveal: bool,
+) -> AppResult<String> {
+    crate::mcp::installer::export_skill_bundle(&state.app_data_dir, reveal)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_payload(sketch_path: Option<&str>, sketch_data_url: Option<&str>) -> GeneratePayload {
+        GeneratePayload {
+            profile_id: "default".to_string(),
+            model: "gpt-image-1".to_string(),
+            prompt: "silver knight running".to_string(),
+            archetype: "character_card".to_string(),
+            archetype_prompt: "Full-Body Game Character".to_string(),
+            style_prompt: "hand-painted fantasy".to_string(),
+            project_style_prompt: "".to_string(),
+            background_prompt: "Pure flat #FFFFFF white backdrop, zero vignette.".to_string(),
+            negative_prompt: "no text".to_string(),
+            size: "1536x1024".to_string(),
+            project: "test".to_string(),
+            count: 1,
+            sketch_data_url: sketch_data_url.map(|s| s.to_string()),
+            sketch_path: sketch_path.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_resolve_sketch_input_missing_path_returns_not_found() {
+        let missing = std::env::temp_dir().join(format!(
+            "sketch2asset_missing_{}.png",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let payload = sample_payload(Some(&missing.to_string_lossy()), None);
+        let err = resolve_sketch_input(&payload)
+            .expect_err("non-existent sketch_path must fail with NotFound instead of falling back");
+        assert_eq!(err.code, AppErrorCode::NotFound);
+        assert!(err.message.contains("not found"), "msg={}", err.message);
+    }
+
+    #[test]
+    fn test_resolve_sketch_input_unreadable_directory_returns_not_found() {
+        let dir = std::env::temp_dir();
+        let payload = sample_payload(Some(&dir.to_string_lossy()), None);
+        let err = resolve_sketch_input(&payload)
+            .expect_err("directory path cannot be read as image file");
+        assert_eq!(err.code, AppErrorCode::NotFound);
+    }
+
+    #[test]
+    fn test_resolve_sketch_input_existing_file_loads_bytes_and_mime() {
+        let tmp_file = std::env::temp_dir().join(format!(
+            "sketch2asset_ref_{}.jpg",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let expected = b"fake-jpeg-data";
+        fs::write(&tmp_file, expected).unwrap();
+
+        let payload = sample_payload(Some(&format!("  {}  ", tmp_file.display())), None);
+        let res = resolve_sketch_input(&payload).unwrap();
+        let _ = fs::remove_file(&tmp_file);
+
+        let (bytes, mime) = res.expect("expected resolved sketch bytes");
+        assert_eq!(bytes, expected);
+        assert_eq!(mime, "image/jpeg");
+    }
+
+    #[test]
+    fn test_resolve_sketch_input_blank_or_none_returns_ok_none() {
+        let payload_none = sample_payload(None, None);
+        assert!(resolve_sketch_input(&payload_none).unwrap().is_none());
+
+        let payload_blank = sample_payload(Some("   "), Some("  "));
+        assert!(resolve_sketch_input(&payload_blank).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_resolve_sketch_input_invalid_data_url_returns_invalid_input() {
+        let payload = sample_payload(None, Some("not-a-valid-data-url"));
+        let err = resolve_sketch_input(&payload).expect_err("malformed data URL must fail");
+        assert_eq!(err.code, AppErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn test_assemble_game_asset_prompt_prefixes_background_and_sketch() {
+        let payload = sample_payload(None, None);
+        let prompt = assemble_game_asset_prompt(&payload, true);
+        assert!(prompt.contains("Based on the provided reference/sketch"));
+        assert!(prompt.contains("CRITICAL BACKGROUND RULE: Pure flat #FFFFFF white backdrop"));
+        assert!(prompt.contains("Target Canvas Aspect Ratio & Resolution: 3:2 horizontal landscape (1536x1024px)."));
+        assert!(prompt.contains("STRICT AVOID / NEGATIVE CONSTRAINTS: no text"));
+    }
 }

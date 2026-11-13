@@ -68,7 +68,7 @@ export const SPRITE_ACTION_PRESETS: SpriteActionPreset[] = [
     labelEn: 'Default Template (Free Action Prompt, No Built-in Bias)',
     placeholder: '输入角色与连续动作描述（例如：一个拿着武士刀的香蕉武士，拔刀横斩并收刀的连续分解动作）...',
     placeholderEn: 'Describe character & sequential motion (e.g., A banana samurai drawing katana, slashing horizontally, and sheathing)...',
-    rule: '2D game sprite sheet of sequential character animation frames, smooth frame-by-frame motion progression'
+    rule: '2D game sprite sheet of sequential character animation frames, uniform phase progression with large distinct limb silhouette changes between every consecutive frame (strictly NO duplicate or near-identical adjacent poses)'
   },
   {
     id: 'idle',
@@ -76,7 +76,7 @@ export const SPRITE_ACTION_PRESETS: SpriteActionPreset[] = [
     labelEn: 'Idle Breathing Cycle',
     placeholder: '补充角色特征或待机细节（如已选定角色参考图可留空，直接按待机呼吸预设生成）...',
     placeholderEn: 'Optional character or idle details (leave empty to use reference character with Idle Breathing preset)...',
-    rule: '2D game sprite sheet of idle breathing animation cycle, subtle chest and weapon bobbing motion across frames, consistent standing posture'
+    rule: '2D game sprite sheet of idle breathing animation cycle: Frame 1 neutral upright -> Frame 2 inhaling chest/shoulders rising -> Frame 3 peak expansion -> Frame 4 exhaling settling -> Frame 5 lowest relaxed posture -> Frame 6 rebounding to neutral, feet planted at identical ground baseline'
   },
   {
     id: 'walk',
@@ -84,7 +84,7 @@ export const SPRITE_ACTION_PRESETS: SpriteActionPreset[] = [
     labelEn: 'Side Walk Cycle',
     placeholder: '补充角色特征或行走细节（如已选定角色参考图可留空，直接按横向行走预设生成）...',
     placeholderEn: 'Optional character or walk details (leave empty to use reference character with Walk Cycle preset)...',
-    rule: '2D side-view game sprite sheet of a smooth walking cycle animation, progressive leg stride and arm swing frame by frame, facing right'
+    rule: '2D side-view game sprite sheet of a full walking cycle facing right with strict biomechanic keyframe breakdown: (1) Full Stride Contact A (front heel landing, back leg extended), (2) Down/Recoil A (front knee bent low), (3) Mid-Stride Passing A (legs crossing torso midline), (4) High-Point Push-Off A, (5) Full Stride Contact B (opposite leg forward), (6) Down/Passing B — every consecutive frame MUST show a distinct leg/arm angle with zero duplicate adjacent poses'
   },
   {
     id: 'run',
@@ -92,7 +92,7 @@ export const SPRITE_ACTION_PRESETS: SpriteActionPreset[] = [
     labelEn: 'Dynamic Run Cycle',
     placeholder: '补充角色特征或奔跑细节（如已选定角色参考图可留空，直接按高速奔跑预设生成）...',
     placeholderEn: 'Optional character or run details (leave empty to use reference character with Run Cycle preset)...',
-    rule: '2D side-view game sprite sheet of a dynamic running cycle animation, forward-leaning posture, clear stride progression, facing right'
+    rule: '2D side-view game sprite sheet of a dynamic running cycle facing right with strict keyframe progression: (1) Wide Airborne Stride A, (2) Front Foot Impact Compression A, (3) Rapid Mid-Stride Drive A, (4) Explosive Rear Toe Push-Off A, (5) Opposite Wide Stride B, (6) Opposite Drive/Recovery B — uniform motion delta between every frame, no repeated adjacent poses'
   },
   {
     id: 'attack',

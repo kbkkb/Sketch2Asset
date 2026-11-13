@@ -12,7 +12,7 @@ class AppStore {
   settings = $state<AppSettings | null>(null);
   projects = $state<ProjectInfo[]>([]);
   activeView = $state<'generate' | 'studio' | 'character' | 'settings'>('generate');
-  settingsTab = $state<'providers' | 'matting' | 'system'>('providers');
+  settingsTab = $state<'providers' | 'matting' | 'agents' | 'system'>('providers');
   studioPendingAsset = $state<AssetItem | null>(null);
   characterPendingAsset = $state<AssetItem | null>(null);
   characterSubMode = $state<'turnaround' | 'outfit' | 'spritesheet'>('turnaround');
@@ -37,7 +37,7 @@ class AppStore {
     this.activeView = 'character';
   }
 
-  openSettings(tab: 'providers' | 'matting' | 'system' = 'providers') {
+  openSettings(tab: 'providers' | 'matting' | 'agents' | 'system' = 'providers') {
     this.settingsTab = tab;
     this.activeView = 'settings';
   }

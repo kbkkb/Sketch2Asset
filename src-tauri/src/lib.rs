@@ -2,6 +2,8 @@ pub mod commands;
 pub mod error;
 pub mod library;
 pub mod matting;
+pub mod mcp;
+pub mod postprocess;
 pub mod providers;
 pub mod secrets;
 pub mod state;
@@ -132,6 +134,7 @@ pub fn run() {
             commands::get_api_key,
             commands::get_api_key_masked,
             commands::fetch_provider_models,
+            commands::analyze_comfyui_workflow,
             commands::generate_assets,
             commands::list_projects,
             commands::upsert_project,
@@ -153,6 +156,10 @@ pub fn run() {
             commands::run_studio_region_edit,
             commands::generate_character_asset,
             commands::check_app_update,
+            commands::get_agent_hub_status,
+            commands::install_agent_integration,
+            commands::uninstall_agent_integration,
+            commands::export_agent_skill_bundle,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Sketch2Asset application");

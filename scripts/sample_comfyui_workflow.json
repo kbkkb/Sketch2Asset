@@ -1,0 +1,89 @@
+{
+  "last_node_id": 9,
+  "last_link_id": 9,
+  "nodes": [
+    {
+      "id": 4,
+      "type": "CheckpointLoaderSimple",
+      "pos": [20, 100],
+      "size": [315, 98],
+      "widgets_values": ["pixelArtXL_v1.safetensors"]
+    },
+    {
+      "id": 5,
+      "type": "EmptyLatentImage",
+      "pos": [400, 420],
+      "size": [315, 106],
+      "title": "画布尺寸 (Empty Latent)",
+      "widgets_values": [1024, 1024, 1]
+    },
+    {
+      "id": 6,
+      "type": "CLIPTextEncode",
+      "pos": [400, 100],
+      "size": [420, 140],
+      "title": "正向提示词 (Positive Prompt)",
+      "inputs": [
+        { "name": "clip", "type": "CLIP", "link": 3 }
+      ],
+      "widgets_values": ["default workflow positive prompt"]
+    },
+    {
+      "id": 7,
+      "type": "CLIPTextEncode",
+      "pos": [400, 260],
+      "size": [420, 140],
+      "title": "反向提示词 (Negative Prompt)",
+      "inputs": [
+        { "name": "clip", "type": "CLIP", "link": 4 }
+      ],
+      "widgets_values": ["blurry, low quality, watermark"]
+    },
+    {
+      "id": 3,
+      "type": "KSampler",
+      "pos": [860, 100],
+      "size": [315, 262],
+      "title": "主采样器 (KSampler)",
+      "inputs": [
+        { "name": "model", "type": "MODEL", "link": 1 },
+        { "name": "positive", "type": "CONDITIONING", "link": 5 },
+        { "name": "negative", "type": "CONDITIONING", "link": 6 },
+        { "name": "latent_image", "type": "LATENT", "link": 2 }
+      ],
+      "widgets_values": [123456789, "randomize", 20, 7.5, "euler", "normal", 1.0]
+    },
+    {
+      "id": 8,
+      "type": "VAEDecode",
+      "pos": [1210, 100],
+      "size": [210, 46],
+      "inputs": [
+        { "name": "samples", "type": "LATENT", "link": 7 },
+        { "name": "vae", "type": "VAE", "link": 8 }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "SaveImage",
+      "pos": [1460, 100],
+      "size": [315, 270],
+      "inputs": [
+        { "name": "images", "type": "IMAGE", "link": 9 }
+      ],
+      "widgets_values": ["Sketch2Asset_Test"]
+    }
+  ],
+  "links": [
+    [1, 4, 0, 3, 0, "MODEL"],
+    [2, 5, 0, 3, 3, "LATENT"],
+    [3, 4, 1, 6, 0, "CLIP"],
+    [4, 4, 1, 7, 0, "CLIP"],
+    [5, 6, 0, 3, 1, "CONDITIONING"],
+    [6, 7, 0, 3, 2, "CONDITIONING"],
+    [7, 3, 0, 8, 0, "LATENT"],
+    [8, 4, 2, 8, 1, "VAE"],
+    [9, 8, 0, 9, 0, "IMAGE"]
+  ],
+  "version": 0.4
+}

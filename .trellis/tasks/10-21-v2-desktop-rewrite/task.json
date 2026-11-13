@@ -1,0 +1,30 @@
+{
+  "id": "v2-desktop-rewrite",
+  "name": "v2-desktop-rewrite",
+  "title": "Sketch2Asset v2 桌面端全面重构",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "kb",
+  "assignee": "kb",
+  "createdAt": "2026-10-21",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "10-21-v2-phase1-core-gen",
+    "10-21-v2-phase2-studio",
+    "10-21-v2-phase3-character-inpaint"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

@@ -1,11 +1,13 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import type {
+  AgentHubStatus,
   AppError,
   AppSettings,
   AppUpdateInfo,
   AssetItem,
   CharacterGeneratePayload,
   CharacterGenerateResponse,
+  ComfyWorkflowAnalysis,
   GeneratePayload,
   GenerateResponse,
   MattingModelInfo,
@@ -56,6 +58,8 @@ export const api = {
       apiBase,
       apiKeyOverride: apiKeyOverride || null
     }),
+  analyzeComfyuiWorkflow: (apiBase: string, rawContent: string) =>
+    call<ComfyWorkflowAnalysis>('analyze_comfyui_workflow', { apiBase, rawContent }),
   generateAssets: (payload: GeneratePayload) =>
     call<GenerateResponse>('generate_assets', { payload }),
   listProjects: () => call<ProjectInfo[]>('list_projects'),
@@ -111,5 +115,12 @@ export const api = {
     call<RegionEditResponse>('run_studio_region_edit', { payload }),
   generateCharacterAsset: (payload: CharacterGeneratePayload) =>
     call<CharacterGenerateResponse>('generate_character_asset', { payload }),
-  checkAppUpdate: () => call<AppUpdateInfo>('check_app_update')
+  checkAppUpdate: () => call<AppUpdateInfo>('check_app_update'),
+  getAgentHubStatus: () => call<AgentHubStatus>('get_agent_hub_status'),
+  installAgentIntegration: (agentId: string) =>
+    call<AgentHubStatus>('install_agent_integration', { agentId }),
+  uninstallAgentIntegration: (agentId: string) =>
+    call<AgentHubStatus>('uninstall_agent_integration', { agentId }),
+  exportAgentSkillBundle: (reveal = true) =>
+    call<string>('export_agent_skill_bundle', { reveal })
 };

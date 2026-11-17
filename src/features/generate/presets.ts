@@ -59,6 +59,21 @@ export const ARCHETYPE_PRESETS: ArchetypePreset[] = [
     ]
   },
   {
+    id: 'sprite_sheet',
+    labelKey: 'arch_sprite_sheet',
+    promptRule:
+      '2D game character animation sprite sheet arranged in a strictly uniform row-by-column grid (such as 2x3 or 2x4), one full character per cell centered inside a 75% safe zone with generous padding, consistent character identity/proportions/weapon/facing direction across all frames, NO visible grid lines or text.',
+    recommendedSize: '1536x1024',
+    modifiers: [
+      { id: 'grid_2x3', zh: '2×3 6帧动作', en: '2×3 (6 Frames)', promptSnippet: 'strictly uniform 2 rows by 3 columns (6-frame) animation sprite sheet layout' },
+      { id: 'grid_2x4', zh: '2×4 8帧动作', en: '2×4 (8 Frames)', promptSnippet: 'strictly uniform 2 rows by 4 columns (8-frame) animation sprite sheet layout' },
+      { id: 'side_right', zh: '横版朝右视角', en: '2D Side-View Right', promptSnippet: '2D side-scrolling view with character consistently facing right across all frames' },
+      { id: 'uniform_pixel', zh: '统一像素颗粒', en: 'Uniform Pixel Art', promptSnippet: 'consistent retro pixel art grid size across all animation frames, zero mixels' },
+      { id: 'slash_vfx', zh: '刀光打击特效', en: 'Slash Arc VFX', promptSnippet: 'dynamic glowing weapon slash arc VFX cleanly contained inside each frame cell' },
+      { id: 'baseline_align', zh: '全帧统一地平线', en: 'Unified Ground Baseline', promptSnippet: 'consistent ground foot baseline and character scale across every animation cell' }
+    ]
+  },
+  {
     id: 'tile_texture',
     labelKey: 'arch_tile_texture',
     promptRule:

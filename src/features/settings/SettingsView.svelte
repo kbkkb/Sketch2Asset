@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getVersion } from '@tauri-apps/api/app';
   import {
     Plus,
     Trash2,
@@ -35,7 +34,6 @@
   import { api } from '$lib/api';
   import type {
     MattingModelInfo,
-    AppUpdateInfo,
     AgentHubStatus,
     ComfyWorkflowConfig,
     ComfyWorkflowAnalysis
@@ -60,39 +58,6 @@
   let agentHub = $state<AgentHubStatus | null>(null);
   let busyAgentId = $state<string | null>(null);
   let activeSnippetTab = $state<'json' | 'toml' | 'cli' | 'skill'>('json');
-
-  // Update check state
-  let appVersion = $state('0.2.1');
-  let updateInfo = $state<AppUpdateInfo | null>(null);
-  let isCheckingUpdate = $state(false);
-
-  onMount(async () => {
-    try {
-      appVersion = await getVersion();
-    } catch {
-      appVersion = '0.2.1';
-    }
-  });
-
-  async function handleCheckUpdate() {
-    isCheckingUpdate = true;
-    try {
-      const res = await api.checkAppUpdate();
-      updateInfo = res;
-      if (!res.hasUpdate) {
-        appStore.toast(
-          'ok',
-          i18n.locale === 'en'
-            ? `Up to date (v${res.currentVersion})`
-            : `当前已是最新版本 (v${res.currentVersion})`
-        );
-      }
-    } catch (e: any) {
-      appStore.toast('err', String(e?.message || e));
-    } finally {
-      isCheckingUpdate = false;
-    }
-  }
 
   const IMG_REGEX =
     /image|img|dall|flux|seedream|seededit|banana|imagen|stable|sdxl|sd3|midjourney|\bmj\b|kolors|cogview|wanx|hunyuan-image|ideogram|recraft|playground|pixart|photon|irag/i;
@@ -1574,6 +1539,41 @@
                     </select>
                   </div>
                 </div>
+
+                <!-- Window Close Button Behavior -->
+                <div class="flex flex-col gap-2 rounded-xl border border-line bg-ink-0/60 p-4">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <span class="text-xs font-semibold text-fg-muted">
+                      {i18n.t('close_behavior_label')}
+                    </span>
+                    <span class="text-[11px] text-fg-subtle">
+                      {i18n.t('close_behavior_hint')}
+                    </span>
+                  </div>
+                  <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {#each [
+                      { id: 'ask', label: i18n.t('close_behavior_ask') },
+                      { id: 'tray', label: i18n.t('close_behavior_tray') },
+                      { id: 'exit', label: i18n.t('close_behavior_exit') }
+                    ] as opt (opt.id)}
+                      {@const curBehavior = appStore.settings.closeBehavior || 'ask'}
+                      <button
+                        type="button"
+                        onclick={() =>
+                          appStore.saveSettings({
+                            closeBehavior: opt.id as 'ask' | 'tray' | 'exit'
+                          })
+                        }
+                        class="flex items-center justify-center rounded-lg border px-3 py-2 text-xs font-semibold whitespace-nowrap transition-all {curBehavior ===
+                        opt.id
+                          ? 'border-accent bg-accent/15 text-accent'
+                          : 'border-line bg-ink-1 text-fg-muted hover:text-fg'}"
+                      >
+                        {opt.label}
+                      </button>
+                    {/each}
+                  </div>
+                </div>
               </div>
 
               <!-- Backup & Migration Card -->
@@ -1628,12 +1628,12 @@
                     <Info size={14} class="text-accent" />
                     <span>{i18n.t('about_app_title')}</span>
                     <span class="rounded-md bg-ink-2 px-2 py-0.5 font-mono text-[11px] font-bold text-accent">
-                      v{appVersion}
+                      v{appStore.appVersion || '0.2.1'}
                     </span>
-                    {#if updateInfo}
-                      {#if updateInfo.hasUpdate}
+                    {#if appStore.updateInfo}
+                      {#if appStore.updateInfo.hasUpdate}
                         <span class="rounded-md bg-ok/20 px-2 py-0.5 text-[11px] font-bold text-ok">
-                          {i18n.t('about_has_update')}: {updateInfo.latestVersion}
+                          {i18n.t('about_has_update')}: {appStore.updateInfo.latestVersion}
                         </span>
                       {:else}
                         <span class="rounded-md bg-ink-2 px-2 py-0.5 text-[11px] font-semibold text-fg-muted">
@@ -1648,9 +1648,9 @@
                 </div>
 
                 <div class="flex items-center gap-2.5">
-                  {#if updateInfo?.hasUpdate}
+                  {#if appStore.updateInfo?.hasUpdate}
                     <a
-                      href={updateInfo.releaseUrl}
+                      href={appStore.updateInfo.releaseUrl}
                       target="_blank"
                       rel="noreferrer"
                       class="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-xs font-bold whitespace-nowrap text-ink-0 transition-opacity hover:opacity-90"
@@ -1661,11 +1661,11 @@
                   {/if}
                   <button
                     type="button"
-                    disabled={isCheckingUpdate}
-                    onclick={handleCheckUpdate}
+                    disabled={appStore.isCheckingUpdate}
+                    onclick={() => appStore.refreshUpdateCheck(false)}
                     class="flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-ink-2 px-3.5 py-2 text-xs font-semibold whitespace-nowrap text-fg hover:border-accent disabled:opacity-50"
                   >
-                    {#if isCheckingUpdate}
+                    {#if appStore.isCheckingUpdate}
                       <Loader2 size={14} class="animate-spin text-accent" />
                       <span>{i18n.t('about_checking')}</span>
                     {:else}

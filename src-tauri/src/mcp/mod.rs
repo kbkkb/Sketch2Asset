@@ -43,6 +43,7 @@ fn default_archetype_prompt(arch: &str) -> &'static str {
         "item_icon" => "Game Item Icon: Single isolated object centered on canvas, clear readable silhouette, generous margin around edges, no cropped parts.",
         "pixel_sprite" => "Authentic Pixel Art Sprite: Strict 1:1 square pixel grid, flat solid colors per cell, zero sub-pixel anti-aliasing or mixels, clean 1px dark outline.",
         "character_card" => "Full-Body Game Character Concept: Complete head-to-toe standing figure, clear silhouette and costume layering.",
+        "sprite_sheet" => "2D Game Character Animation Sprite Sheet: Strictly uniform row-by-column grid (such as 2x3 or 2x4), one full character per cell centered inside a 75% safe zone with generous padding, consistent character identity, proportions, weapon, and facing direction across all frames, no visible grid lines or text.",
         "tile_texture" => "Orthographic Seamless Game Tile Texture: 90-degree top-down flat diffuse lighting, repeatable surface pattern.",
         "ui_element" => "Game UI Component / Frame: Symmetrical front-facing orthographic UI element, clean center area.",
         _ => "High quality 2D game-ready digital asset, crisp edges and clean silhouette.",
@@ -401,7 +402,27 @@ async fn exec_generate_asset(state: &AppState, args: &Value) -> AppResult<Value>
     };
 
     let sketch_bytes = resolve_sketch_input(&payload)?;
-    let final_prompt = assemble_game_asset_prompt(&payload, sketch_bytes.is_some());
+    let secondary_ref_bytes = if let Some(sec_path_str) = args
+        .get("secondary_ref_path")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let p = PathBuf::from(sec_path_str);
+        if !p.exists() || !p.is_file() {
+            return Err(AppError::new(
+                AppErrorCode::NotFound,
+                format!("Secondary reference image not found: {}", sec_path_str),
+            ));
+        }
+        let b = fs::read(&p)?;
+        Some((b, "image/png".to_string()))
+    } else {
+        None
+    };
+
+    let has_any_ref = sketch_bytes.is_some() || secondary_ref_bytes.is_some();
+    let final_prompt = assemble_game_asset_prompt(&payload, has_any_ref);
 
     let (mut img_bytes, via) = if prof.api_mode == "comfyui" {
         providers::comfyui::generate_via_comfyui(
@@ -412,11 +433,37 @@ async fn exec_generate_asset(state: &AppState, args: &Value) -> AppResult<Value>
             &final_prompt,
             &payload.negative_prompt,
             &size,
-            sketch_bytes,
-            None,
+            sketch_bytes.or_else(|| secondary_ref_bytes.clone()),
+            secondary_ref_bytes,
             prof.comfy_config.as_ref(),
         )
         .await?
+    } else if let (Some(primary), Some(secondary)) = (sketch_bytes.clone(), secondary_ref_bytes.clone()) {
+        if prof.api_mode == "chat" {
+            providers::edit_regions_via_chat(
+                &state.http,
+                &prof.api_base,
+                &api_key,
+                &model,
+                &final_prompt,
+                primary,
+                Some(secondary),
+            )
+            .await?
+        } else {
+            providers::edit_regions_via_images(
+                &state.http,
+                &prof.api_base,
+                &api_key,
+                &model,
+                &final_prompt,
+                &size,
+                primary,
+                Some(secondary),
+                None,
+            )
+            .await?
+        }
     } else if prof.api_mode == "chat" {
         providers::generate_via_chat(
             &state.http,
@@ -424,7 +471,7 @@ async fn exec_generate_asset(state: &AppState, args: &Value) -> AppResult<Value>
             &api_key,
             &model,
             &final_prompt,
-            sketch_bytes,
+            sketch_bytes.or(secondary_ref_bytes),
         )
         .await?
     } else {
@@ -435,7 +482,7 @@ async fn exec_generate_asset(state: &AppState, args: &Value) -> AppResult<Value>
             &model,
             &final_prompt,
             &size,
-            sketch_bytes,
+            sketch_bytes.or(secondary_ref_bytes),
         )
         .await?
     };
@@ -493,7 +540,7 @@ async fn exec_generate_asset(state: &AppState, args: &Value) -> AppResult<Value>
             let preserve_vertical_arc = args
                 .get("preserve_vertical_arc")
                 .and_then(|v| v.as_bool())
-                .unwrap_or_else(|| postprocess::is_airborne_motion(&prompt));
+                .unwrap_or(false);
             let (aligned_sheet, aligned_frames) =
                 postprocess::align_spritesheet_uniform_grid_with_options(
                     &rgba_img,
@@ -716,19 +763,36 @@ fn build_character_generate_args(args: &Value) -> AppResult<Value> {
     let explicit_cols = args.get("cols").and_then(|v| v.as_u64()).map(|v| v as u32);
 
     let mut merged = serde_json::Map::new();
+    let initial_preserve_arc = args
+        .get("preserve_vertical_arc")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     if sub_mode == "spritesheet" {
         let (rows, cols) = postprocess::infer_sprite_grid(user_prompt, explicit_rows, explicit_cols);
         let choreo_prompt = postprocess::build_keyframe_choreography_prompt(user_prompt, rows, cols);
         merged.insert("prompt".to_string(), Value::String(choreo_prompt));
         merged.insert("align_spritesheet".to_string(), Value::Bool(true));
+        merged.insert("preserve_vertical_arc".to_string(), Value::Bool(initial_preserve_arc));
         merged.insert("sprite_rows".to_string(), Value::Number(rows.into()));
         merged.insert("sprite_cols".to_string(), Value::Number(cols.into()));
     } else {
-        let mode_prefix = match sub_mode {
-            "turnaround" => "3-View Character Turnaround Sheet: Horizontally aligned Front view, Side view, and Back view of the exact same character standing on a single shared ground baseline, pure flat #FFFFFF white background (zero vignette, zero gradient, zero cast shadow).",
-            "outfit" => "Identity-Locked Character Outfit Skinning: Keep the character's facial features, hair, and body proportions strictly identical while changing costume/armor as requested, pure flat #FFFFFF white background (zero vignette, zero gradient, zero cast shadow).",
-            "expression" => "2x2 Character Expression Sheet Grid: 4 distinct facial expressions of the exact same character in a clean 2x2 grid on a pure flat #FFFFFF white background (zero vignette, zero gradient, zero cast shadow).",
-            _ => "2D Game Sprite Sheet Animation Sequence: Equally spaced sequential animation frames arranged in a clean horizontal/grid layout on a shared ground baseline, pure flat #FFFFFF white background (zero vignette, zero gradient, zero cast shadow).",
+        let mode_prefix: String = match sub_mode {
+            "turnaround" => "3-View Character Turnaround Sheet: Horizontally aligned Front view, Side view, and Back view of the exact same character standing on a single shared ground baseline, pure flat #FFFFFF white background (zero vignette, zero gradient, zero cast shadow).".to_string(),
+            "outfit" => "Identity-Locked Character Outfit Skinning: Keep the character's facial features, hair, and body proportions strictly identical while changing costume/armor as requested, pure flat #FFFFFF white background (zero vignette, zero gradient, zero cast shadow).".to_string(),
+            "expression" => {
+                if explicit_rows == Some(1) && explicit_cols == Some(1) {
+                    "Single Full Character Expression Variant: Strictly keep the exact same character identity, hairstyle, pose, body framing, camera crop, outfit, and pure flat #FFFFFF white background from the reference portrait while changing ONLY the facial expression and emotion as requested.".to_string()
+                } else {
+                    let r = explicit_rows.unwrap_or(2).max(1);
+                    let c = explicit_cols.unwrap_or(2).max(1);
+                    format!(
+                        "{}x{} Character Expression Sheet Grid: {} distinct facial expressions of the exact same character in a clean {}x{} grid on a pure flat #FFFFFF white background (zero vignette, zero gradient, zero cast shadow).",
+                        r, c, r * c, r, c
+                    )
+                }
+            }
+            _ => "2D Game Sprite Sheet Animation Sequence: Equally spaced sequential animation frames arranged in a clean horizontal/grid layout on a shared ground baseline, pure flat #FFFFFF white background (zero vignette, zero gradient, zero cast shadow).".to_string(),
         };
         merged.insert(
             "prompt".to_string(),
@@ -736,7 +800,12 @@ fn build_character_generate_args(args: &Value) -> AppResult<Value> {
         );
     }
 
-    merged.insert("archetype".to_string(), Value::String("character_card".to_string()));
+    let target_archetype = if sub_mode == "spritesheet" {
+        "sprite_sheet"
+    } else {
+        "character_card"
+    };
+    merged.insert("archetype".to_string(), Value::String(target_archetype.to_string()));
     if let Some(anchor) = args
         .get("anchor_image_path")
         .and_then(|v| v.as_str())
@@ -761,6 +830,12 @@ fn build_character_generate_args(args: &Value) -> AppResult<Value> {
         "pixel_block_size",
         "export_frames",
         "output_path",
+        "action_id",
+        "camera_preset",
+        "proportion",
+        "weapon_type",
+        "pose_reference_path",
+        "preserve_vertical_arc",
     ] {
         if let Some(val) = args.get(passthrough_key) {
             merged.insert(passthrough_key.to_string(), val.clone());
@@ -771,8 +846,350 @@ fn build_character_generate_args(args: &Value) -> AppResult<Value> {
 }
 
 async fn exec_generate_character(state: &AppState, args: &Value) -> AppResult<Value> {
-    let merged = build_character_generate_args(args)?;
-    exec_generate_asset(state, &merged).await
+    let mut merged = build_character_generate_args(args)?;
+    let sub_mode = args
+        .get("sub_mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("spritesheet");
+    let user_prompt = args
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+
+    let mut used_pose_guide_path: Option<String> = None;
+    let mut used_action_id: Option<String> = None;
+
+    if sub_mode == "spritesheet" {
+        let rows = merged
+            .get("sprite_rows")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(2) as u32;
+        let cols = merged
+            .get("sprite_cols")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(3) as u32;
+        let size_str = merged
+            .get("size")
+            .and_then(|v| v.as_str())
+            .unwrap_or("1536x1024")
+            .to_string();
+        let (tw, th) = providers::parse_size_dims(&size_str).unwrap_or((1536, 1024));
+
+        if let Some(pose_path) = args
+            .get("pose_reference_path")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            let p = PathBuf::from(pose_path);
+            if !p.exists() || !p.is_file() {
+                return Err(AppError::new(
+                    AppErrorCode::NotFound,
+                    format!("pose_reference_path not found: {}", pose_path),
+                ));
+            }
+            used_pose_guide_path = Some(pose_path.to_string());
+        } else {
+            let explicit_action = args
+                .get("action_id")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+            let action_to_use = explicit_action.or_else(|| {
+                crate::pose3d::infer_action_id_from_prompt(user_prompt).map(|s| s.to_string())
+            });
+
+            if let Some(act_id) = action_to_use {
+                if let Ok(mut clip) = crate::pose3d::get_pose_action(&state.app_data_dir, &act_id) {
+                    if let Some(cp) = args.get("camera_preset").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+                        crate::pose3d::apply_camera_preset(&mut clip.camera, cp);
+                    }
+                    if let Some(pp) = args.get("proportion").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+                        crate::pose3d::apply_proportion_preset(&mut clip.proportion, pp);
+                    }
+                    if let Some(wt) = args.get("weapon_type").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+                        clip.proportion.weapon_type = wt.trim().to_string();
+                    }
+                    if let Ok((png_bytes, _via_renderer)) =
+                        crate::pose3d::render_pose_via_bridge_or_fallback(
+                            &state.app_data_dir,
+                            &clip,
+                            rows,
+                            cols,
+                            tw,
+                            th,
+                        )
+                    {
+                        let guide_dir = state.app_data_dir.join("pose3d_bridge");
+                        let _ = fs::create_dir_all(&guide_dir);
+                        let guide_file = guide_dir.join(format!("pose_guide_{}_{}x{}.png", clip.id, rows, cols));
+                        if fs::write(&guide_file, &png_bytes).is_ok() {
+                            used_pose_guide_path = Some(guide_file.to_string_lossy().replace('\\', "/"));
+                            used_action_id = Some(clip.id.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(ref guide_path) = used_pose_guide_path {
+            if let Some(obj) = merged.as_object_mut() {
+                obj.insert(
+                    "secondary_ref_path".to_string(),
+                    Value::String(guide_path.clone()),
+                );
+                let explicit_arc = args
+                    .get("preserve_vertical_arc")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                obj.insert("preserve_vertical_arc".to_string(), Value::Bool(explicit_arc));
+                if let Some(p_val) = obj.get("prompt").and_then(|v| v.as_str()).map(|s| s.to_string()) {
+                    obj.insert(
+                        "prompt".to_string(),
+                        Value::String(format!(
+                            "{}\n\n3D POSE SHEET STRUCTURAL GUIDE: Follow the provided {}x{} 3D stickman pose reference grid cell-by-cell (matching camera perspective, vertical root posture height, crouch depth, and left/right limb & weapon orientation) while painting the full detailed character in the requested art style (do NOT draw stickman geometry or dashed guide lines in the final output).",
+                            p_val, rows, cols
+                        )),
+                    );
+                }
+            }
+        }
+    }
+
+    let mut res = exec_generate_asset(state, &merged).await?;
+    if let Some(obj) = res.as_object_mut() {
+        if let Some(p) = used_pose_guide_path {
+            obj.insert("poseGuidePath".to_string(), Value::String(p));
+        }
+        if let Some(a) = used_action_id {
+            obj.insert("actionId".to_string(), Value::String(a));
+        }
+    }
+    Ok(res)
+}
+
+async fn exec_list_actions(state: &AppState) -> AppResult<Value> {
+    let clips = crate::pose3d::ensure_seeded_actions(&state.app_data_dir)?;
+    let summary: Vec<Value> = clips
+        .iter()
+        .map(|c| {
+            json!({
+                "id": c.id,
+                "name": c.name,
+                "nameEn": c.name_en,
+                "category": c.category,
+                "builtin": c.builtin,
+                "loopAnim": c.loop_anim,
+                "defaultRows": c.default_rows,
+                "defaultCols": c.default_cols,
+                "camera": c.camera,
+                "proportion": c.proportion,
+                "keyframeCount": c.keyframes.len()
+            })
+        })
+        .collect();
+    Ok(json!({
+        "actions": summary,
+        "cameraPresets": ["side_2d", "hd2d_45", "topdown_34", "topdown_pure"],
+        "proportionPresets": ["chibi_2", "chibi_3", "standard_6"],
+        "weaponTypes": ["none", "sword", "spear", "staff"]
+    }))
+}
+
+async fn exec_edit_action(state: &AppState, args: &Value) -> AppResult<Value> {
+    let action_id = args
+        .get("action_id")
+        .or_else(|| args.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if action_id.is_empty() {
+        return Err(AppError::new(
+            AppErrorCode::InvalidInput,
+            "action_id is required",
+        ));
+    }
+
+    let mut clip = crate::pose3d::get_pose_action(&state.app_data_dir, action_id).unwrap_or_else(|_| {
+        let mut base = crate::pose3d::builtin_pose_clips().into_iter().next().unwrap();
+        base.id = action_id.to_string();
+        base.name = args
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(action_id)
+            .to_string();
+        base.name_en = args
+            .get("name_en")
+            .and_then(|v| v.as_str())
+            .unwrap_or(action_id)
+            .to_string();
+        base.builtin = false;
+        base
+    });
+
+    if let Some(name) = args.get("name").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+        clip.name = name.trim().to_string();
+    }
+    if let Some(name_en) = args.get("name_en").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+        clip.name_en = name_en.trim().to_string();
+    }
+    if let Some(loop_anim) = args.get("loop_anim").and_then(|v| v.as_bool()) {
+        clip.loop_anim = loop_anim;
+    }
+    if let Some(r) = args.get("default_rows").and_then(|v| v.as_u64()) {
+        clip.default_rows = (r as u32).clamp(1, 8);
+    }
+    if let Some(c) = args.get("default_cols").and_then(|v| v.as_u64()) {
+        clip.default_cols = (c as u32).clamp(1, 12);
+    }
+    if let Some(cp) = args.get("camera_preset").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+        crate::pose3d::apply_camera_preset(&mut clip.camera, cp);
+    }
+    if let Some(yaw) = args.get("yaw").and_then(|v| v.as_f64()) {
+        clip.camera.yaw = yaw as f32;
+    }
+    if let Some(pitch) = args.get("pitch").and_then(|v| v.as_f64()) {
+        clip.camera.pitch = pitch as f32;
+    }
+    if let Some(ortho) = args.get("ortho").and_then(|v| v.as_bool()) {
+        clip.camera.ortho = ortho;
+    }
+    if let Some(zoom) = args.get("zoom").and_then(|v| v.as_f64()) {
+        clip.camera.zoom = (zoom as f32).clamp(0.4, 2.5);
+    }
+    if let Some(pp) = args.get("proportion").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+        crate::pose3d::apply_proportion_preset(&mut clip.proportion, pp);
+    }
+    if let Some(hs) = args.get("head_scale").and_then(|v| v.as_f64()) {
+        clip.proportion.head_scale = hs as f32;
+    }
+    if let Some(ts) = args.get("torso_scale").and_then(|v| v.as_f64()) {
+        clip.proportion.torso_scale = ts as f32;
+    }
+    if let Some(ls) = args.get("limb_scale").and_then(|v| v.as_f64()) {
+        clip.proportion.limb_scale = ls as f32;
+    }
+    if let Some(wt) = args.get("weapon_type").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+        clip.proportion.weapon_type = wt.trim().to_string();
+    }
+    if let Some(ws) = args.get("weapon_scale").and_then(|v| v.as_f64()) {
+        clip.proportion.weapon_scale = ws as f32;
+    }
+    if let Some(kfs_val) = args.get("keyframes") {
+        if let Ok(kfs) = serde_json::from_value::<Vec<crate::pose3d::PoseKeyframe>>(kfs_val.clone()) {
+            if !kfs.is_empty() {
+                clip.keyframes = kfs;
+            }
+        }
+    }
+
+    let saved = crate::pose3d::save_pose_action_clip(&state.app_data_dir, clip)?;
+    let req_id = crate::pose3d::push_live_action_to_bridge(
+        &state.app_data_dir,
+        &saved,
+        saved.default_rows,
+        saved.default_cols,
+        1536,
+        1024,
+    );
+
+    Ok(json!({
+        "savedAction": saved,
+        "bridgeRequestId": req_id
+    }))
+}
+
+async fn exec_render_3d_pose(state: &AppState, args: &Value) -> AppResult<Value> {
+    let action_id = args
+        .get("action_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("idle")
+        .trim();
+    let mut clip = crate::pose3d::get_pose_action(&state.app_data_dir, action_id)?;
+
+    if let Some(cp) = args.get("camera_preset").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+        crate::pose3d::apply_camera_preset(&mut clip.camera, cp);
+    }
+    if let Some(yaw) = args.get("yaw").and_then(|v| v.as_f64()) {
+        clip.camera.yaw = yaw as f32;
+    }
+    if let Some(pitch) = args.get("pitch").and_then(|v| v.as_f64()) {
+        clip.camera.pitch = pitch as f32;
+    }
+    if let Some(pp) = args.get("proportion").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+        crate::pose3d::apply_proportion_preset(&mut clip.proportion, pp);
+    }
+    if let Some(wt) = args.get("weapon_type").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+        clip.proportion.weapon_type = wt.trim().to_string();
+    }
+
+    let rows = args
+        .get("rows")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(clip.default_rows)
+        .clamp(1, 8);
+    let cols = args
+        .get("cols")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(clip.default_cols)
+        .clamp(1, 12);
+    let width = args
+        .get("width")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(1536)
+        .clamp(256, 4096);
+    let height = args
+        .get("height")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(1024)
+        .clamp(256, 4096);
+
+    let (png_bytes, renderer_via) = crate::pose3d::render_pose_via_bridge_or_fallback(
+        &state.app_data_dir,
+        &clip,
+        rows,
+        cols,
+        width,
+        height,
+    )?;
+
+    let out_path = if let Some(custom) = args
+        .get("output_path")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        PathBuf::from(custom)
+    } else {
+        let dir = state.app_data_dir.join("pose3d_renders");
+        let _ = fs::create_dir_all(&dir);
+        dir.join(format!("pose3d_{}_{}x{}.png", clip.id, rows, cols))
+    };
+
+    if let Some(parent) = out_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    fs::write(&out_path, &png_bytes)?;
+    let clean_path = out_path.to_string_lossy().replace('\\', "/");
+
+    Ok(json!({
+        "actionId": clip.id,
+        "rows": rows,
+        "cols": cols,
+        "width": width,
+        "height": height,
+        "camera": clip.camera,
+        "proportion": clip.proportion,
+        "rendererVia": renderer_via,
+        "file_path": clean_path,
+        "filePath": clean_path
+    }))
 }
 
 async fn exec_list_assets(state: &AppState, args: &Value) -> AppResult<Value> {
@@ -960,12 +1377,12 @@ fn mcp_tools_schema() -> Value {
             },
             {
                 "name": "s2a_generate_asset",
-                "description": "Generate a 2D game asset (item_icon, pixel_sprite, character_card, tile_texture, ui_element, free) with optional local GPU background removal, pixel-perfect integer grid quantization, and direct output to a game project path.",
+                "description": "Generate a 2D game asset (item_icon, pixel_sprite, character_card, sprite_sheet, tile_texture, ui_element, free) with optional local GPU background removal, pixel-perfect integer grid quantization, and direct output to a game project path.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "prompt": { "type": "string", "description": "Detailed asset description" },
-                        "archetype": { "type": "string", "enum": ["item_icon", "pixel_sprite", "character_card", "tile_texture", "ui_element", "free"] },
+                        "archetype": { "type": "string", "enum": ["item_icon", "pixel_sprite", "character_card", "sprite_sheet", "tile_texture", "ui_element", "free"] },
                         "size": { "type": "string", "description": "Canvas resolution e.g. 1024x1024, 1536x1024, 1024x1536, 1920x1080" },
                         "project": { "type": "string", "description": "Optional Sketch2Asset project folder name (overrides activeProject)" },
                         "profile_id": { "type": "string", "description": "Optional provider profile ID or name (overrides activeProfileId)" },
@@ -976,6 +1393,7 @@ fn mcp_tools_schema() -> Value {
                         "auto_remove_bg": { "type": "boolean", "description": "Automatically run local DirectML GPU matting + 3-stage anti-halo after generation (defaults to true for pixel_sprite)" },
                         "pixel_perfect": { "type": "boolean", "description": "Snap pixel art to a strict integer pixel grid with crisp alpha & zero mixels, plus export a 1x native pixel PNG (auto-enabled for pixel_sprite or pixel prompts)" },
                         "pixel_block_size": { "type": "integer", "description": "Optional explicit pixel block size (e.g. 4, 6, 8); auto-detected via edge-span histogram if omitted" },
+                        "preserve_vertical_arc": { "type": "boolean", "description": "Default false (Engine In-Place mode: keeps every frame anchored to the character collider/ground origin for Unity/Godot Rigidbody2D). Set true only if you want a static showcase parabolic jump height offset baked inside the sprite canvas." },
                         "output_path": { "type": "string", "description": "Optional destination PNG file path inside the user's game repository" }
                     },
                     "required": ["prompt"]
@@ -1003,14 +1421,20 @@ fn mcp_tools_schema() -> Value {
                     "properties": {
                         "sub_mode": { "type": "string", "enum": ["turnaround", "outfit", "spritesheet", "expression"] },
                         "prompt": { "type": "string", "description": "Character description or animation action description" },
-                        "rows": { "type": "integer", "description": "Optional grid rows for spritesheet (e.g. 2 for 2x3 or 1 for 1x6; auto-inferred from prompt if omitted)" },
-                        "cols": { "type": "integer", "description": "Optional grid columns for spritesheet (e.g. 3 for 2x3 or 6 for 1x6; auto-inferred from prompt if omitted)" },
+                        "rows": { "type": "integer", "description": "Optional grid rows for spritesheet or expression (e.g. 2 for 2x3, 1 for 1x6, or 1 with cols=1 for a single portrait expression variant; auto-inferred from prompt if omitted)" },
+                        "cols": { "type": "integer", "description": "Optional grid columns for spritesheet or expression (e.g. 3 for 2x3, 6 for 1x6, or 1 with rows=1 for a single portrait expression variant; auto-inferred from prompt if omitted)" },
                         "project": { "type": "string", "description": "Optional Sketch2Asset project folder name (overrides activeProject)" },
                         "profile_id": { "type": "string", "description": "Optional provider profile ID or name (overrides activeProfileId)" },
                         "model": { "type": "string", "description": "Optional model ID (overrides profile default model)" },
                         "style_prompt": { "type": "string", "description": "Optional style instructions" },
                         "negative_prompt": { "type": "string", "description": "Optional negative constraints" },
                         "anchor_image_path": { "type": "string", "description": "Optional base character reference image path" },
+                        "action_id": { "type": "string", "description": "Optional 3D stickman action ID (e.g. idle, walk, run, jump, attack, cast, hurt, ko) for spritesheet pose guidance" },
+                        "camera_preset": { "type": "string", "description": "Optional 3D camera angle preset (side_2d | hd2d_45 | topdown_34 | topdown_pure)" },
+                        "proportion": { "type": "string", "description": "Optional 3D body proportion preset (chibi_2 | chibi_3 | standard_6)" },
+                        "weapon_type": { "type": "string", "description": "Optional weapon prop on right hand (none | sword | spear | staff)" },
+                        "pose_reference_path": { "type": "string", "description": "Optional pre-rendered 3D stickman pose sheet PNG path" },
+                        "preserve_vertical_arc": { "type": "boolean", "description": "Default false (Engine In-Place mode: keeps every frame anchored to the character collider/ground origin for Unity/Godot Rigidbody2D, including jump velocity states). Set true only if you want a static showcase parabolic jump height offset baked inside the sprite canvas." },
                         "size": { "type": "string", "description": "Resolution e.g. 1536x1024 or 1024x1024" },
                         "auto_remove_bg": { "type": "boolean", "description": "Run local GPU matting automatically (defaults to true for spritesheet)" },
                         "pixel_perfect": { "type": "boolean", "description": "Quantize pixel-art sprite sheets onto a strict integer pixel grid (auto-enabled when prompt mentions pixel art)" },
@@ -1019,6 +1443,63 @@ fn mcp_tools_schema() -> Value {
                         "output_path": { "type": "string", "description": "Optional output PNG file path" }
                     },
                     "required": ["sub_mode", "prompt"]
+                }
+            },
+            {
+                "name": "s2a_list_actions",
+                "description": "List all built-in and custom 3D stickman keyframe actions (idle, walk, run, jump, attack, cast, hurt, ko) plus camera, proportion, and weapon presets.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "s2a_edit_action",
+                "description": "Create or update a 3D stickman keyframe action clip (camera yaw/pitch/preset, body proportion preset/scales, weapon_type, or bone keyframes) and push live to the Desktop 3D Studio viewport.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action_id": { "type": "string", "description": "Action ID (e.g. 'jump', 'attack', or custom ID)" },
+                        "name": { "type": "string", "description": "Display name (Chinese)" },
+                        "name_en": { "type": "string", "description": "Display name (English)" },
+                        "loop_anim": { "type": "boolean", "description": "Whether the animation loops seamlessly" },
+                        "default_rows": { "type": "integer", "description": "Default grid rows" },
+                        "default_cols": { "type": "integer", "description": "Default grid columns" },
+                        "camera_preset": { "type": "string", "description": "side_2d | hd2d_45 | topdown_34 | topdown_pure" },
+                        "yaw": { "type": "number", "description": "Camera yaw angle in degrees (90 = pure 2D side view)" },
+                        "pitch": { "type": "number", "description": "Camera pitch angle in degrees (0 = horizontal, 25 = HD-2D, 45 = 3/4 top-down)" },
+                        "ortho": { "type": "boolean", "description": "Orthographic projection (default true)" },
+                        "zoom": { "type": "number", "description": "Camera zoom factor (0.4..2.5)" },
+                        "proportion": { "type": "string", "description": "chibi_2 | chibi_3 | standard_6" },
+                        "head_scale": { "type": "number" },
+                        "torso_scale": { "type": "number" },
+                        "limb_scale": { "type": "number" },
+                        "weapon_type": { "type": "string", "description": "none | sword | spear | staff" },
+                        "weapon_scale": { "type": "number" },
+                        "keyframes": { "type": "array", "description": "Optional array of PoseKeyframe objects { t, rootPos: [x,y,z], bones: { hips: [rx,ry,rz], ... } }" }
+                    },
+                    "required": ["action_id"]
+                }
+            },
+            {
+                "name": "s2a_render_3d_pose",
+                "description": "Render a Rows x Cols unlit 3D stickman pose reference sheet PNG for an action_id (with optional camera_preset, yaw, pitch, proportion, weapon_type) via live Desktop Three.js bridge + deterministic 3D software fallback.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action_id": { "type": "string", "description": "Action ID (idle, walk, run, jump, attack, cast, hurt, ko, or custom)" },
+                        "rows": { "type": "integer", "description": "Grid rows (default from action clip, e.g. 2)" },
+                        "cols": { "type": "integer", "description": "Grid columns (default from action clip, e.g. 3)" },
+                        "width": { "type": "integer", "description": "Canvas width in px (default 1536)" },
+                        "height": { "type": "integer", "description": "Canvas height in px (default 1024)" },
+                        "camera_preset": { "type": "string", "description": "side_2d | hd2d_45 | topdown_34 | topdown_pure" },
+                        "yaw": { "type": "number", "description": "Optional camera yaw override in degrees" },
+                        "pitch": { "type": "number", "description": "Optional camera pitch override in degrees" },
+                        "proportion": { "type": "string", "description": "chibi_2 | chibi_3 | standard_6" },
+                        "weapon_type": { "type": "string", "description": "none | sword | spear | staff" },
+                        "output_path": { "type": "string", "description": "Optional output PNG file path" }
+                    },
+                    "required": ["action_id"]
                 }
             },
             {
@@ -1122,6 +1603,9 @@ pub async fn run_mcp_stdio_loop() -> AppResult<()> {
                     "s2a_generate_asset" => exec_generate_asset(&state, &args).await,
                     "s2a_remove_background" => exec_remove_background(&state, &args).await,
                     "s2a_generate_character" => exec_generate_character(&state, &args).await,
+                    "s2a_list_actions" => exec_list_actions(&state).await,
+                    "s2a_edit_action" => exec_edit_action(&state, &args).await,
+                    "s2a_render_3d_pose" => exec_render_3d_pose(&state, &args).await,
                     "s2a_edit_region" => exec_edit_region(&state, &args).await,
                     "s2a_list_assets" => exec_list_assets(&state, &args).await,
                     _ => Err(AppError::new(
@@ -1322,5 +1806,107 @@ mod tests {
         let p = merged_turnaround["prompt"].as_str().unwrap();
         assert!(p.contains("pure flat #FFFFFF white background"));
         assert!(p.contains("zero vignette"));
+    }
+
+    #[test]
+    fn test_3d_pose_guide_does_not_false_trigger_preserve_vertical_arc() {
+        for (act, prompt) in [
+            ("idle", "待机呼吸 2x3"),
+            ("run", "移动奔跑 2x3"),
+            ("attack", "挥砍攻击 2x3"),
+            ("ko", "死亡倒地 2x3"),
+        ] {
+            let args = json!({
+                "sub_mode": "spritesheet",
+                "action_id": act,
+                "prompt": prompt
+            });
+            let merged = build_character_generate_args(&args).unwrap();
+            assert_eq!(
+                merged["preserve_vertical_arc"],
+                Value::Bool(false),
+                "Grounded action '{}' must have preserve_vertical_arc == false",
+                act
+            );
+        }
+
+        let jump_args = json!({
+            "sub_mode": "spritesheet",
+            "action_id": "jump",
+            "prompt": "跳跃腾空 2x3"
+        });
+        let merged_jump = build_character_generate_args(&jump_args).unwrap();
+        assert_eq!(
+            merged_jump["preserve_vertical_arc"],
+            Value::Bool(false),
+            "By default, even jump uses Engine In-Place Collider-Locked mode (preserve_vertical_arc == false)"
+        );
+
+        let showcase_jump_args = json!({
+            "sub_mode": "spritesheet",
+            "action_id": "jump",
+            "prompt": "跳跃腾空 2x3",
+            "preserve_vertical_arc": true
+        });
+        let merged_showcase = build_character_generate_args(&showcase_jump_args).unwrap();
+        assert_eq!(merged_showcase["preserve_vertical_arc"], Value::Bool(true));
+
+        let guide_suffix = "3D POSE SHEET STRUCTURAL GUIDE: Follow the provided 2x3 3D stickman pose reference grid cell-by-cell (matching camera perspective, vertical root posture height, crouch depth, and left/right limb & weapon orientation) while painting the full detailed character in the requested art style (do NOT draw stickman geometry or dashed guide lines in the final output).";
+        assert!(!postprocess::is_airborne_motion(guide_suffix));
+    }
+
+    #[test]
+    fn test_mcp_sprite_sheet_schema_and_expression_variants() {
+        let schema = mcp_tools_schema();
+        let tools = schema["tools"].as_array().unwrap();
+        let gen_asset_tool = tools
+            .iter()
+            .find(|t| t["name"] == "s2a_generate_asset")
+            .expect("s2a_generate_asset tool present");
+        let archetypes = gen_asset_tool["inputSchema"]["properties"]["archetype"]["enum"]
+            .as_array()
+            .unwrap();
+        assert!(
+            archetypes.iter().any(|v| v == "sprite_sheet"),
+            "sprite_sheet must be present in s2a_generate_asset archetype enum"
+        );
+        assert!(default_archetype_prompt("sprite_sheet").contains("Sprite Sheet"));
+
+        let single_expr = build_character_generate_args(&json!({
+            "sub_mode": "expression",
+            "prompt": "happy bright smile",
+            "rows": 1,
+            "cols": 1
+        }))
+        .unwrap();
+        let single_prompt = single_expr["prompt"].as_str().unwrap();
+        assert!(single_prompt.starts_with("Single Full Character Expression Variant:"));
+        assert!(single_prompt.contains("changing ONLY the facial expression and emotion as requested"));
+        assert_eq!(single_expr["archetype"], json!("character_card"));
+
+        let default_grid_expr = build_character_generate_args(&json!({
+            "sub_mode": "expression",
+            "prompt": "happy, angry, sad, surprised"
+        }))
+        .unwrap();
+        let default_grid_prompt = default_grid_expr["prompt"].as_str().unwrap();
+        assert!(default_grid_prompt.starts_with("2x2 Character Expression Sheet Grid: 4 distinct facial expressions"));
+
+        let custom_grid_expr = build_character_generate_args(&json!({
+            "sub_mode": "expression",
+            "prompt": "6 battle emotions",
+            "rows": 2,
+            "cols": 3
+        }))
+        .unwrap();
+        let custom_grid_prompt = custom_grid_expr["prompt"].as_str().unwrap();
+        assert!(custom_grid_prompt.starts_with("2x3 Character Expression Sheet Grid: 6 distinct facial expressions"));
+
+        let sheet_args = build_character_generate_args(&json!({
+            "sub_mode": "spritesheet",
+            "prompt": "slash attack 2x3"
+        }))
+        .unwrap();
+        assert_eq!(sheet_args["archetype"], json!("sprite_sheet"));
     }
 }

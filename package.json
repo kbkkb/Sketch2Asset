@@ -9,16 +9,18 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri",
-    "build:bin": "vite build && cargo build --manifest-path src-tauri/Cargo.toml --release --features tauri/custom-protocol && node -e \"import('fs').then(fs => fs.copyFileSync('src-tauri/target/release/Sketch2Asset.exe', 'bin/Sketch2Asset.exe'))\""
+    "build:bin": "vite build && cargo build --manifest-path src-tauri/Cargo.toml --release --features tauri/custom-protocol --bins && node -e \"(async () => { const cp = await import('child_process'); const fs = await import('fs'); try { cp.execSync('taskkill /F /T /IM Sketch2Asset.exe /IM sketch2asset-mcp.exe', { stdio: 'ignore' }); } catch {} for (let i = 0; i < 15; i++) { try { for (const f of fs.readdirSync('bin')) { if (f.endsWith('.old.exe')) try { fs.unlinkSync('bin/' + f); } catch {} } fs.copyFileSync('src-tauri/target/release/Sketch2Asset.exe', 'bin/Sketch2Asset.exe'); fs.copyFileSync('src-tauri/target/release/sketch2asset-mcp.exe', 'bin/sketch2asset-mcp.exe'); break; } catch (e) { if (i === 14) throw e; await new Promise(r => setTimeout(r, 250)); } } })()\""
   },
   "dependencies": {
     "@lucide/svelte": "^1.60.0",
-    "@tauri-apps/api": "^2.2.0"
+    "@tauri-apps/api": "^2.2.0",
+    "three": "^0.187.0"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "@tailwindcss/vite": "^4.0.6",
     "@tauri-apps/cli": "^2.2.0",
+    "@types/three": "^0.187.0",
     "svelte": "^5.19.0",
     "svelte-check": "^4.1.4",
     "tailwindcss": "^4.0.6",

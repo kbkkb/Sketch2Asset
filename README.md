@@ -1,212 +1,220 @@
-# Sketch2Asset — AI Game Asset Forge, Sprite Sheet Slicer & Pixel Studio
+# Sketch2Asset — AI Game Asset Forge, 3D Pose K-Frame Studio & Native Matting Workstation
 
 <p align="center">
   <b>An open-source native desktop workstation built for game developers, indie creators, and digital artists</b><br>
-  Unifying structured asset generation, character turnaround & skinning, anti-clipping sprite sheet slicing with per-frame bounds expansion, local DirectML GPU matting, and AI pixel art quantization into one production pipeline.
+  Unifying structured asset generation, Three.js 3D pose keyframing, anti-clipping sprite sheet calibration, local DirectML GPU matting, pixel grid quantization, and AI Agent MCP integration into one production pipeline.
 </p>
 
 <p align="center">
-  <b><a href="README.md">English</a></b> | <b><a href="README_zh.md">简体中文</a></b>
+  <b><a href="README.md">English</a></b> | <b><a href="README_zh.md">简体中文</a></b> | <b><a href="CHANGELOG.md">Changelog</a></b>
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/Release-v0.2.1-84cc16.svg" alt="Version v0.2.1">
   <img src="https://img.shields.io/badge/Architecture-Tauri_2_%2B_Rust-orange.svg" alt="Tauri 2 + Rust">
-  <img src="https://img.shields.io/badge/Frontend-Svelte_5_Runes-ff3e00.svg" alt="Svelte 5">
+  <img src="https://img.shields.io/badge/Frontend-Svelte_5_%2B_Three.js-ff3e00.svg" alt="Svelte 5 + Three.js">
   <img src="https://img.shields.io/badge/Matting-ONNX_DirectML_GPU-10b981.svg" alt="ONNX Runtime DirectML">
-  <img src="https://img.shields.io/badge/Storage-AppData_%2B_DPAPI-6366f1.svg" alt="AppData Isolation">
-  <img src="https://img.shields.io/badge/i18n-English_%2F_简体中文-06b6d4.svg" alt="i18n">
+  <img src="https://img.shields.io/badge/Agent-MCP_Server_(11_Tools)-6366f1.svg" alt="MCP Server">
+  <img src="https://img.shields.io/badge/Workflow-ComfyUI_Ready-06b6d4.svg" alt="ComfyUI Ready">
   <img src="https://img.shields.io/badge/License-MIT-22c55e.svg" alt="MIT License">
 </p>
 
 ---
 
-## Why Sketch2Asset v0.2.0?
+## Why Sketch2Asset v0.2.1?
 
-General-purpose AI image generators routinely fail at the **"last mile" of game production**: pixel art suffers from anti-aliasing blur and inconsistent sub-pixel "mixels"; sweeping sword slashes in sprite sheets breach uniform grid lines and get severed; transparent PNGs imported into Unity, Unreal, or Godot show ugly white halos under bilinear filtering; and multi-batch assets drift out of style consistency across a project.
+General-purpose AI image generators routinely fail at the **"last mile" of game production**:
+- Sweeping sword slashes in sprite sheets breach uniform grid lines and get severed, or airborne jump frames float inside the texture and misalign Unity / Godot colliders;
+- Generated pixel art suffers from anti-aliasing blur and inconsistent sub-pixel "mixels";
+- Transparent PNGs show ugly white halos under bilinear filtering in game engines;
+- Workflows lack native automation bridges to AI Coding Agents (Claude / Cursor / Antigravity) and local ComfyUI pipelines.
 
-**Sketch2Asset v0.2.0** is rebuilt from the ground up with **Tauri 2 + Rust + Svelte 5** as a pure native desktop application with zero Python dependency. It bridges generation, character derivation, sprite sheet calibration, and pixel-level post-processing across three specialized workspaces to deliver truly **Game-Ready** assets.
+**Sketch2Asset** is built natively with **Tauri 2 + Rust + Svelte 5 + Three.js** with zero Python dependency—combining structured generation, 3D pose guidance, engine-ready sprite sheet calibration, DirectML GPU matting, and an MCP server into a single **Game-Ready** production pipeline.
 
 ---
 
-## Feature Panorama
+## Feature Highlights
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <b>1. MOD-04 · 3D Pose & Keyframe Studio</b><br>
+      <sub>Unlit Three.js Capsule Rig · Unity-Style 3-Axis Gizmo · 8 Action Presets · Multi-Grid Export</sub><br><br>
+      <img src="docs/media/demo-3d-pose.gif" alt="MOD-04 3D Pose and Keyframe Demo" width="100%">
+    </td>
+    <td width="50%" align="center">
+      <b>2. MOD-02 · Anti-Clipping Sprite Slicer & Engine Pivot</b><br>
+      <sub>Smart Island Slicing · Per-Frame Shift & Bounds Expand · In-Place Engine Alignment</sub><br><br>
+      <img src="docs/media/demo-spritesheet.gif" alt="MOD-02 Sprite Sheet Calibration Demo" width="100%">
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <b>3. MOD-01 · Turnaround Slicer & Identity-Locked Skinning</b><br>
+      <sub>Projection-Valley Auto Slice · Click-to-Zoom Lightbox · Class/Armor Outfit Variants</sub><br><br>
+      <img src="docs/media/demo-turnaround-skinning.png" alt="MOD-01 Turnaround and Skinning Demo" width="100%">
+    </td>
+    <td width="50%" align="center">
+      <b>4. MOD-03 · Expression & Portrait Variations</b><br>
+      <sub>Batch Standalone Portraits from One Reference · Plus 2×2 / 2×3 / 3×3 Grid Slicing</sub><br><br>
+      <img src="docs/media/demo-expression.png" alt="MOD-03 Expression Variations Demo" width="100%">
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <b>5. Local DirectML GPU Matting & Anti-Halo Protection</b><br>
+      <sub>BiRefNet / BEN2 / IS-Net Native Acceleration · Unmixing + Choke + 4px Color Bleed</sub><br><br>
+      <img src="docs/media/demo-gpu-matting.gif" alt="DirectML GPU Matting Demo" width="100%">
+    </td>
+    <td width="50%" align="center">
+      <b>6. Canvas Studio · Region Annotation & AI Inpaint Redraw</b><br>
+      <sub>Draw Numbered Boxes (#1, #2) Directly on Canvas · Targeted AI Redraw & Auto-Composite</sub><br><br>
+      <img src="docs/media/demo-region-redraw.png" alt="Canvas Studio Region Annotation Redraw Demo" width="100%">
+    </td>
+  </tr>
+</table>
+
+---
+
+## Workspace Panorama
 
 ### 1. Asset Forge — Structured Game Asset Generation
 
-1. **6 Game Asset Archetypes & Context-Aware Modifier Tags**
-   Switching archetypes automatically injects production composition rules and surfaces dedicated modifier chips:
-   - **Item Icon (`item_icon`)**: Centered isolated object, readable silhouette, generous border margin; modifiers for *45° Isometric, Front Symmetrical, Crisp Rim Light, Metallic & Gem Sheen, Battle-worn*.
-   - **Pixel Sprite (`pixel_sprite`)**: Enforces a strict 1:1 square pixel grid, **Zero Mixels** (no sub-pixel details), and flat solid cell colors; modifiers for *Strict Grid (No Mixels), 32×32 Grid Density, 64×64 HD Pixel, 1px Dark Outline, Side-scroller View, Top-down RPG View*. **Automatically triggers the Pixel Art Cleaner pipeline upon completion.**
-   - **Character Card (`character_card`)**: Full-body head-to-toe standing composition; modifiers for *Standard A-Pose, Dynamic Action Pose, 3-View Turnaround, Layered Costume Detail*.
-   - **Tile Texture (`tile_texture`)**: Orthographic top-down surface with even lighting; modifiers for *Seamless Tileable, 90° Orthographic Top-down, Flat Diffuse Lighting, Stylized Hand-painted*.
-   - **UI Element (`ui_element`)**: Symmetrical front-facing orthographic UI component with clean center; modifiers for *9-Slice Frame Ready, Ornate Filigree Corners, HUD Emblem Medallion, Sci-Fi Hard-Surface HUD*.
-   - **Free Mode (`free`)**: Unconstrained composition with optional *Clean Silhouette, Studio Rim Lighting, Game-Ready Asset* tags.
+<p align="center">
+  <!-- 📷 [Screenshot #3] Asset Forge full workspace with prompt dock, tags & project hub -->
+  <img src="docs/media/forge-overview.png" alt="Asset Forge Workspace" width="88%">
+</p>
 
-2. **Negative Guardrails & Prompt Variable Matrix**
-   - **5 Built-in Negative Guardrails**: One-click toggles for *No Text / Watermark, No Cropped Edges, No Cast Ground Shadow, No Background Clutter, No Depth Blur / Noise*, plus custom negative prompt input.
-   - **`[A|B|C]` Prompt Matrix Syntax**: Write prompts like `A [fire|ice|lightning] enchanted [greatsword|staff]` to automatically expand into up to 16 Cartesian variants for parallel batch exploration.
-
-3. **Project Hub & Style Reference Anchors**
-   - Create, rename, and switch isolated game projects with automatic per-project archiving.
-   - Lock a project-wide **Style Prompt suffix** and up to **4 Style Reference Anchor images** that are automatically injected into every generation to keep art direction cohesive across hundreds of assets.
-
-4. **Multi-Image Reference & Region Annotation Guide**
-   - Drag or paste multiple reference images (`[#1]`, `[#2]`...) and draw numbered **Region Annotation boxes** directly on any reference image with targeted edit instructions, automatically compositing a visual guide for multimodal models.
-   - 8 built-in art styles (*16-Bit Pixel, Cartoon, Anime Cel, 3D Clay/Resin Render, Low-Poly, PBR Realistic, Watercolor*) and full resolution presets (`1024×1024`, `1536×1024`, `1920×1080` 16:9 Widescreen, `2048×2048` 2K, `3840×2160` 4K UHD, plus custom dimensions).
+- **7 Game Asset Archetypes**: Includes the new **`Sprite Sheet (sprite_sheet)`** archetype alongside **Item Icon, Pixel Sprite, Character Card, Tile Texture, UI Element, and Free Mode**, automatically injecting production composition rules and modifier tags.
+- **Prompt Matrix & Negative Guardrails**: Expand `[fire|ice|lightning]` × `[greatsword|staff]` into up to 16 parallel variants; toggle 5 game-ready negative guardrails with one click.
+- **Project Style Anchors & Region Annotations**: Lock a project-wide Style Prompt and up to 4 reference anchors, or draw numbered bounding boxes (`#1`, `#2`...) directly on reference images for targeted edits.
 
 ---
 
-### 2. Character Workshop — Turnarounds, Sprite Sheets & Expressions
+### 2. Character Workshop — 3D Pose, Turnarounds, Sprite Sheets & Expressions
 
-Built on an extensible modular registry (`CHARACTER_MODULES`) to derive a complete character asset suite from a single concept:
+<p align="center">
+  <!-- 📷 [TODO Screenshot] Character Workshop full view (save as docs/media/character-workshop.png) -->
+  <img src="docs/media/character-workshop.png" alt="Character Workshop Interface" width="88%">
+</p>
 
-#### `MOD-01` Turnaround & Identity-Locked Skinning
-- **Front / Side / Back Turnaround Slicer**: Generates horizontally aligned front, side, and back views on a shared baseline. Uses vertical projection valley detection to automatically slice the sheet into 3 individual views without cutting into arms or capes, with draggable split lines for fine-tuning.
-- **Identity-Locked Outfit Skinning**: Locks the base character's facial features, proportions, and silhouette while generating new armor tiers, class outfits, or color palettes from text prompts.
-
-#### `MOD-02` Sprite Sheet Studio
-- **8 Action Presets & Virtual Safe-Zone Grid Guide**:
-  - Includes a **Default Free Template** (virtual placeholder that disappears on typing, with zero built-in motion bias) plus **Idle Breathing, Side Walk, Dynamic Run, Melee Attack, Magic Spellcasting, Jump & Landing Arc, and Hit / Knockback** presets.
-  - Automatically synthesizes and injects a **Safe-Zone Grid Layout Guide** image to help multimodal models respect cell boundaries and foot baselines.
-- **Connected-Island Smart Slicing & Slash VFX Protection**:
-  - **Connected-Island Clustering**: Automatically tracks weapon tips or capes connected to the character across grid lines instead of severing them flat, while stripping stray fragments intruding from neighboring cells.
-  - **Non-Destructive VFX Preservation**: When automatic background removal is unchecked, 100% of bright sword slashes, energy arcs, and translucent effects are preserved intact without accidental erasure.
-- **Foot Pivot Alignment & Anti-Clipping Safe Canvas**:
-  - Detects each frame's lower-body foot center of gravity and aligns all frames to a unified ground baseline. **Single-frame position nudges are strictly decoupled from canvas sizing**, guaranteeing pure rigid-body translation with zero scaling jitter.
-  - Computes the maximum horizontal and vertical reach across the entire sequence to expand a uniform safe canvas so overhead slashes never clip.
-- **Dual-Channel Per-Frame Calibration: Position Shift + Bounds Expand**:
-  - **Position Shift**: Per-frame `←` `→` `↑` `↓` pixel nudging with one-click reset `⟲`.
-  - **Bounds Expand (`R` / `L` / `T` / `B`)**: When a wide slash extends into the next cell (e.g., frame #5's blade arc crossing into frame #6), expand or shrink the capture boundary on any side (`+10` / `-10` px) to recover the full slash into the current frame or crop out neighbor debris.
-  - **Interactive Raw Sheet Grid**: Click any cell directly on the raw sprite sheet overview to select that frame for calibration, complete with live highlight borders and expansion badges (e.g., `+40R`).
-- **Interactive Animation Previewer & Export**:
-  - Supports **smooth mouse-wheel zoom (0.25x ~ 8x)**, left-click drag pan, view reset, 2~24 FPS playback control, onion-skin ghosting, and per-frame ON/OFF toggles.
-  - Re-composes and exports calibrated frames into a **standardized equal-cell Sprite Sheet PNG** or saves directly into the project library with instant cross-tab synchronization.
-
-#### `MOD-03` Expression Sheet Generator
-- Supports **2×2 (4 expressions), 2×3 (6 expressions), and 3×3 (9 expressions)** grids. Generates cohesive dialogue portrait variations (joy, anger, sorrow, surprise, shy, smug, etc.) and automatically slices them into standalone portrait assets.
+- **`MOD-01` Turnaround & Identity-Locked Skinning**: Generates horizontally aligned front/side/back views with projection-valley slicing, **click-to-zoom Lightbox inspection**, and identity-locked outfit variants.
+- **`MOD-02` Sprite Sheet Studio**:
+  - **3D Pose Reference Driven**: Uses multi-cell pose sheets rendered from `MOD-04` instead of brittle text-only action templates.
+  - **Engine In-Place Alignment (Default)**: Defaults to `preserveVerticalArc = false` so jump/action frames align cleanly with game engine physics colliders, while keeping an optional preview-arc toggle.
+  - **Smart Island Slicing & Dual-Channel Calibration**: Preserves sweeping sword slashes & VFX intact; supports per-frame arrow-key / drag nudging, `R/L/T/B` bounds expansion, highlighted filmstrip scrollbars, and **right-click context menus**.
+- **`MOD-03` Expression Generator**: Prioritizes generating multiple standalone full character portraits from a single reference for dialogue/AVG pipelines, while retaining `2×2` / `2×3` / `3×3` grid slicing.
+- **`MOD-04` 3D Pose & Keyframe Studio** *(v0.2.1 New)*:
+  - Unlit Three.js capsule rig (18+ hierarchical bones, side-scroller L/R, HD-2D 45°, 3/4, front, and top views) with 2-head chibi / 3-head / 6-head proportions and weapon props.
+  - 8 handcrafted action templates (Idle, Walk, Run, Attack, Cast, Jump, Hit, KO), Unity-style 3-axis spherical rotation Gizmo, `W/E` translate/rotate switching, 50-step `Ctrl+Z/Y` undo/redo, and one-click capture into `MOD-02`.
 
 ---
 
-### 3. Canvas Studio — Native GPU Matting & Pixel Art Quantizer
+### 3. Canvas Studio — Native GPU Matting & Pixel Quantizer
 
-1. **Local DirectML GPU AI Matting & Model Manager**
-   - Powered by Rust `ort` + native **ONNX Runtime with DirectML**, supporting NVIDIA, AMD, and Intel GPUs out of the box (with automatic CPU fallback) and zero Python/CUDA setup.
-   - Built-in one-click downloader and manager for 6 SOTA segmentation models:
-     | Model ID | Size / Precision | Best For |
-     | :--- | :--- | :--- |
-     | **`birefnet`** | ~490 MB (FP16) | **Flagship SOTA**: Complex silhouettes, hollow props, and semi-transparent edges |
-     | **`ben2`** | ~220 MB | Next-gen balanced model combining fast inference with crisp boundaries |
-     | **`birefnet-hrsod`** | ~490 MB (FP16) | High-resolution detail specialist for large character illustrations |
-     | **`birefnet-lite`** | ~220 MB | Lightweight model for low-spec hardware or rapid previews |
-     | **`isnet-general-use`** | ~178 MB | Ultra-fast general purpose matting for clean icon batches |
-     | **`isnet-anime`** | ~176 MB | Specialized for 2D anime characters, hair strands, and cel lineart |
-   - Also includes an instant **Solid-Color Corner Flood Cutout** algorithm for millisecond background removal on studio-white or solid-color backdrops.
+<p align="center">
+  <img src="docs/media/demo-pixel-cleaner.png" alt="AI Pixel Art Cleaner Comparison" width="88%">
+</p>
 
-2. **3-Stage Game Engine Anti-Halo Protection**
-   - **Foreground Color Unmixing**: Mathematically removes white background contamination from semi-transparent edge pixels.
-   - **Alpha Edge Choke (0~3px)**: Shrinks the alpha boundary inward to eliminate residual light halos.
-   - **4px Export Color Bleed**: Dilates foreground RGB colors 4px outward into transparent regions (`Alpha = 0`) upon PNG export, completely preventing dark or white seams under bilinear texture sampling in Unity, Unreal, and Godot.
+- **DirectML GPU AI Matting**: Powered by Rust `ort` + ONNX Runtime DirectML (NVIDIA / AMD / Intel out of the box, zero Python/CUDA) with 6 downloadable models:
 
-3. **AI Pixel Art Quantizer & Grid Cleaner**
-   - **Eliminate Fake Pixels (Mixels) & Noise**: Automatically detects or locks pixel grid steps (`Auto`, `32×32`, `64×64`, `128×128`, `256×256`, or fixed `N px`), sampling dominant cell colors to strip diffusion gradients and guarantee **100% flat solid colors per pixel block**.
-   - **Detail Preservation & Retro Palettes**: Switch between Standard and Detail-Preserving modes (protecting 1-pixel eye highlights); quantize to 16/32/64 colors or map to classic **PICO-8 (16-color)** and **Game Boy (4-color)** palettes.
-   - **1:1 Native Resolution Export**: Export a 1024×1024 AI pixel sprite directly at its true native pixel resolution (e.g., crisp `64×64` or `32×32` PNG) with zero interpolation blur.
+<details>
+<summary>Expand to view the 6 built-in matting models & 3-stage anti-halo pipeline</summary>
 
-4. **7 Interactive Canvas Tools & Region Annotation Redraw**
-   - **Wand Flood Restore / Erase**: Click any accidentally removed weapon tip or leftover background island to flood-restore from the original image or flood-erase by color tolerance.
-   - **Brush Restore / Erase**: Freehand alpha channel retouching with adjustable brush radius.
-   - **Marquee Crop & Auto-Trim**: Drag-crop custom bounds or one-click trim transparent margins.
-   - **Region Annotation & AI Inpaint Redraw**: Draw numbered color boxes (`#1`, `#2`...) directly on the canvas, attach specific revision notes to each box, and submit for targeted AI redraw.
-   - **4 Inspection Backdrops & 40-Step History**: Toggle between Checkerboard, Dark, Light, and **Engine Magenta (`#FF00FF`)** backdrops, hold to compare against the original image, and undo/redo up to 40 steps (`Ctrl+Z` / `Ctrl+Y`).
+| Model ID | Size / Precision | Best For |
+| :--- | :--- | :--- |
+| **`birefnet`** | ~490 MB (FP16) | **Flagship SOTA**: Complex silhouettes, hollow props, and semi-transparent edges |
+| **`ben2`** | ~220 MB | Next-gen balanced model combining fast inference with crisp boundaries |
+| **`birefnet-hrsod`** | ~490 MB (FP16) | High-resolution detail specialist for large character illustrations |
+| **`birefnet-lite`** | ~220 MB | Lightweight model for low-spec hardware or rapid previews |
+| **`isnet-general-use`** | ~178 MB | Ultra-fast general purpose matting for clean icon batches |
+| **`isnet-anime`** | ~176 MB | Specialized for 2D anime characters, hair strands, and cel lineart |
+
+- **3-Stage Anti-Halo Protection**: Foreground Color Unmixing → Alpha Edge Choke (`0~3px`) → 4px Export Color Bleed.
+- **7 Interactive Tools**: Wand Flood Restore/Erase, Brush Restore/Erase, Marquee Crop & Auto-Trim, Region Annotation AI Redraw, 4 backdrops (including `#FF00FF` Engine Magenta), and 40-step history.
+
+</details>
 
 ---
 
-## 4. API Hub & System-Level Data Security
+### 4. AI Agent Hub (MCP), ComfyUI & Native Desktop Polish
 
-- **Dual-Pane Shuttle Model Picker**:
-  - Ships with **zero hardcoded default models** to avoid clutter. Pull available models from `/v1/models` with one click, filter image models, search by keyword, inspect truncated long model names via **full-name hover tooltips**, shuttle models into your enabled list, or add custom model IDs manually.
-  - Supports both OpenAI Images API (`/v1/images/generations` & `/v1/images/edits`) and multimodal Chat Completions API (`/v1/chat/completions`).
-- **C: Drive AppData Isolation (Zero Repo Pollution)**:
-  - **Encrypted Credentials**: API keys are stored via the native Windows Credential Manager (DPAPI) and user profile storage—never written as plaintext files inside the workspace folder.
-  - **All User Data Isolated in `%AppData%\com.sketch2asset.app`**:
-    - `settings.json` / `secrets.json`: Preferences and encrypted credential fallback
-    - `data/library.db`: SQLite 3 (WAL mode) project and asset metadata index
-    - `outputs/`: All user project folders and generated/edited PNGs
-    - `models/`: Downloaded ONNX matting model weights
-- **Self-Contained Runtime & Dual-Stage DLL Preloading**:
-  - Immunized against legacy Windows C++ runtimes (e.g. VS 2019 14.22 in `System32`) and strict WebView2 isolation modes (`0x800`). Employs `preload_startup_runtime_dlls()` at process entry millisecond 0 to bind bundled modern MSVC 14.50 CRT & DirectML libraries, combined with `SetDefaultDllDirectories(0x1000)` + `AddDllDirectory` + `LOAD_WITH_ALTERED_SEARCH_PATH`, eliminating `LoadLibraryExW failed (1114)` startup errors entirely.
-- **In-App Update Checker**:
-  - The Settings modal includes an "About & Update Checker" card that connects to the GitHub Releases API in real-time, displaying current and remote versions with one-click access to the latest release assets.
+<p align="center">
+  <!-- 📷 [Screenshot #4] Settings -> AI Agent Hub or ComfyUI Workflow configuration -->
+  <img src="docs/media/settings-mcp-comfyui.png" alt="AI Agent Hub and ComfyUI Settings" width="88%">
+</p>
+
+- **Standalone MCP Server (`sketch2asset-mcp.exe`)** *(v0.2.1 New)*:
+  - Exposes **11 MCP tools** (asset generation, GPU matting, character derivation, reading/editing/rendering `MOD-04` 3D poses via live desktop bridge, region redraw, project management).
+  - **Real-Time Dual Sync**: Settings changes persist immediately for MCP; the frontend polls `library_revision` every 2.5s so MCP-generated assets appear automatically without switching tabs.
+  - **One-Click Setup**: Built-in **AI Agent Hub** in Settings generates and installs `mcpServers` configs for Claude Desktop, Cursor, Antigravity, and more.
+- **Local ComfyUI Workflow Integration** *(v0.2.1 New)*: Connect local ComfyUI endpoints, import custom workflow JSONs, and map Prompt / Size / Batch / Steps / Reference Image nodes.
+- **Native Windows System Tray & Update Checker** *(v0.2.1 New)*: Minimize-to-tray support with configurable close behavior (`ask` / `tray` / `exit`), TitleBar version pill, and accurate SemVer update notifications.
+- **Decompose Workshop (Coming Soon)**: Top-bar placeholder reserved for upcoming transparent layer decomposition.
+- **AppData & DPAPI Security**: Credentials encrypted via Windows DPAPI; all library data and models isolated inside `%AppData%\com.sketch2asset.app`.
 
 ---
 
 ## Local Development & Build
+
+<details>
+<summary>Expand for prerequisites, build commands, and repository structure</summary>
 
 ### 1. Prerequisites
 - **OS**: Windows 10 / 11 (x64)
 - **Frontend**: [Node.js](https://nodejs.org/) >= 18, [pnpm](https://pnpm.io/) >= 9
 - **Backend**: [Rust](https://www.rust-lang.org/) >= 1.75 (MSVC toolchain)
 
-### 2. Development Mode
+### 2. Commands
 ```bash
-# 1. Install frontend dependencies
+# Install frontend dependencies
 pnpm install
 
-# 2. Launch Tauri desktop window with HMR
+# Launch Tauri desktop window with HMR
 pnpm tauri dev
-```
 
-### 3. Type Check & Production Build
-```bash
-# Run strict Svelte / TypeScript diagnostics
+# Strict diagnostics & unit tests
 pnpm check
+cargo test --manifest-path src-tauri/Cargo.toml --lib
 
-# Build frontend production bundle
+# Production build (app + standalone MCP binary)
 pnpm build
-
-# Compile optimized native Rust release binary
 cargo build --release --manifest-path src-tauri/Cargo.toml --features tauri/custom-protocol
 ```
 
----
-
-## Repository Structure
-
+### 3. Repository Structure
 ```text
 sketch2asset/
 ├── src/                                  # Svelte 5 frontend source
 │   ├── features/
-│   │   ├── generate/                     # Asset Forge (archetypes, modifiers, prompt matrix, annotations)
-│   │   ├── character/                    # Character Workshop (turnaround, sprite slicer & bounds expand, expressions)
-│   │   ├── studio/                       # Canvas Studio (GPU matting, pixel cleaner, wand/brush, region redraw)
-│   │   └── settings/                     # Settings Modal (provider shuttle, theme & language dropdown)
-│   ├── lib/
-│   │   ├── components/                   # Shared UI (custom titlebar, model combobox with tooltips)
-│   │   ├── imaging/                      # Core imaging algorithms (island slicer, foot pivot, pixel cleaner, unmixing)
-│   │   ├── i18n/                         # Reactive ZH/EN bilingual dictionary
-│   │   └── stores/                       # Global reactive state & cross-tab asset sync
-│   └── App.svelte                        # Root workspace container
-├── src-tauri/                            # Tauri 2 + Rust backend source
-│   ├── src/
-│   │   ├── commands/                     # IPC command handlers
-│   │   ├── library/                      # SQLite 3 asset & project repository
-│   │   ├── matting/                      # ONNX Runtime (DirectML) inference & anti-halo post-processing
-│   │   ├── providers/                    # OpenAI Images & Chat Completions dual-protocol client
-│   │   ├── secrets.rs                    # Windows Keyring (DPAPI) + AppData credential manager
-│   │   └── state.rs                      # AppData initialization & automatic legacy data migration
-│   ├── build.rs                          # Build-time DLL synchronization script
-│   ├── Cargo.toml                        # Rust package manifest
-│   └── tauri.conf.json                   # Tauri window & bundle.resources configuration
-├── package.json
-└── vite.config.ts
+│   │   ├── generate/                     # Asset Forge (7 archetypes, prompt matrix, annotations)
+│   │   ├── character/                    # Character Workshop (MOD-01 ~ MOD-04)
+│   │   ├── studio/                       # Canvas Studio (GPU matting, pixel cleaner, wand/brush)
+│   │   └── settings/                     # Settings (Providers, ComfyUI, AI Agent Hub, Tray)
+│   └── lib/
+│       ├── components/                   # TitleBar (version/update/decompose), close dialog
+│       ├── imaging/                      # Island slicer, foot pivot, pixel cleaner, unmixing
+│       ├── i18n/                         # Reactive ZH/EN dictionary
+│       └── stores/                       # Reactive state & library_revision sync
+├── src-tauri/                            # Tauri 2 + Rust backend + MCP binary
+│   └── src/
+│       ├── bin/mcp.rs                    # sketch2asset-mcp standalone MCP server
+│       ├── commands/                     # IPC commands & Agent Hub integration
+│       ├── library/                      # SQLite 3 (WAL) repository & revision tracking
+│       ├── matting/                      # ONNX Runtime (DirectML) & anti-halo pipeline
+│       └── providers/                    # OpenAI Images / Chat / ComfyUI clients
+├── docs/media/                           # README screenshots & demo GIFs
+├── CHANGELOG.md                          # Version release notes
+└── package.json
 ```
+
+</details>
 
 ---
 
 ## Acknowledgments
 
 Special thanks to the **[LINUX DO](https://linux.do/)** community and all developers, creators, and testers whose feedback, discussions, and support made this release possible!
-
----
 
 ## License
 

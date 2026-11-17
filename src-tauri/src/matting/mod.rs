@@ -1158,6 +1158,57 @@ pub fn compose_rgba(
         }
     }
 
+    // 3-pass dilation/bridge for luminous white-hot VFX cores (e.g. crescent slash interior)
+    for _pass in 0..3 {
+        let prev_vfx = vfx_mask.clone();
+        for y in 0..h {
+            let row = y * w;
+            for x in 0..w {
+                let idx = row + x;
+                if prev_vfx[idx] {
+                    continue;
+                }
+                if !(c_max_arr[idx] > 185.0 && alpha_src[idx] > 0.35) {
+                    continue;
+                }
+                let mut adj_vfx = false;
+                for dy in -1_isize..=1 {
+                    let ny = y as isize + dy;
+                    if ny < 0 || ny >= h as isize {
+                        continue;
+                    }
+                    for dx in -1_isize..=1 {
+                        if dx == 0 && dy == 0 {
+                            continue;
+                        }
+                        let nx = x as isize + dx;
+                        if nx < 0 || nx >= w as isize {
+                            continue;
+                        }
+                        if prev_vfx[(ny as usize) * w + (nx as usize)] {
+                            adj_vfx = true;
+                            break;
+                        }
+                    }
+                    if adj_vfx {
+                        break;
+                    }
+                }
+                let mut bridge_opp = false;
+                if !adj_vfx {
+                    let has_left = (1..=6_usize).any(|d| x >= d && prev_vfx[row + (x - d)]);
+                    let has_right = (1..=6_usize).any(|d| x + d < w && prev_vfx[row + (x + d)]);
+                    let has_up = (1..=6_usize).any(|d| y >= d && prev_vfx[(y - d) * w + x]);
+                    let has_down = (1..=6_usize).any(|d| y + d < h && prev_vfx[(y + d) * w + x]);
+                    bridge_opp = (has_left && has_right) || (has_up && has_down);
+                }
+                if adj_vfx || bridge_opp {
+                    vfx_mask[idx] = true;
+                }
+            }
+        }
+    }
+
     if enhanced {
         for i in 0..n {
             if vfx_mask[i] {
@@ -1185,12 +1236,36 @@ pub fn compose_rgba(
     let max_pocket_chroma = (bgc_chroma + 10.0).max(18.0);
     let max_pocket_chroma_strict = (bgc_chroma + 6.0).max(12.0);
 
+    let has_vfx_within_2px = |pidx: usize| -> bool {
+        let px = (pidx % w) as isize;
+        let py = (pidx / w) as isize;
+        for dy in -2_isize..=2 {
+            let ny = py + dy;
+            if ny < 0 || ny >= h as isize {
+                continue;
+            }
+            for dx in -2_isize..=2 {
+                let nx = px + dx;
+                if nx < 0 || nx >= w as isize {
+                    continue;
+                }
+                if vfx_mask[(ny as usize) * w + (nx as usize)] {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+
     if is_light_neutral_bg {
         // 4-connected BFS avoids leaking diagonally across 1px dark outlines around white eyes/armor.
         let mut pocket_visited = vec![false; n];
         let mut pocket_queue = VecDeque::new();
         for i in 0..n {
             if vfx_mask[i] {
+                continue;
+            }
+            if alpha_src[i] > 0.60 && c_max_arr[i] > 195.0 && has_vfx_within_2px(i) {
                 continue;
             }
             let is_outer_transparent = alpha_src[i] < 0.12 && a2[i] < 0.15;
@@ -1217,6 +1292,9 @@ pub fn compose_rgba(
             ];
             for nidx in neighbors.into_iter().flatten() {
                 if pocket_visited[nidx] || vfx_mask[nidx] {
+                    continue;
+                }
+                if alpha_src[nidx] > 0.60 && c_max_arr[nidx] > 195.0 && has_vfx_within_2px(nidx) {
                     continue;
                 }
                 let can_purge = if alpha_src[nidx] < 0.92 {
@@ -1281,7 +1359,7 @@ pub fn compose_rgba(
             vfx_mask[i]
                 && (alpha_src[i] < 0.92
                     || a2[i] < 0.92
-                    || (c_max_arr[i] >= 170.0 && d_pc_arr[i] <= 185.0))
+                    || (c_max_arr[i] > 165.0 && a2[i] > 0.05 && d_pc_arr[i] <= 225.0))
         })
         .collect();
 
@@ -1696,5 +1774,48 @@ mod tests {
         let ws = Path::new("..").canonicalize().unwrap_or_else(|_| PathBuf::from("D:/Sketch2Asset"));
         let env_res = ensure_ort_env(&ws);
         assert!(env_res.is_ok(), "ensure_ort_env failed: {:?}", env_res.err());
+    }
+
+    #[test]
+    fn test_crescent_slash_white_hot_core_not_hollowed() {
+        let w = 48_usize;
+        let h = 48_usize;
+        let mut rgb = RgbImage::from_pixel(w as u32, h as u32, Rgb([255, 255, 255]));
+        let mut alpha = vec![0.0_f32; w * h];
+
+        // Opaque character body at left
+        for y in 16..32 {
+            for x in 6..14 {
+                rgb.put_pixel(x as u32, y as u32, Rgb([45, 55, 90]));
+                alpha[y * w + x] = 1.0;
+            }
+        }
+        // Crescent slash: cyan outer rim (x=20..22 and x=27..29), white-hot low-chroma core (x=23..26)
+        for y in 12..36 {
+            for x in 20..30 {
+                if x <= 21 || x >= 28 {
+                    rgb.put_pixel(x as u32, y as u32, Rgb([40, 215, 255]));
+                    alpha[y * w + x] = 0.88;
+                } else {
+                    // White-hot interior with very low chroma and soft alpha < 0.85
+                    rgb.put_pixel(x as u32, y as u32, Rgb([250, 254, 255]));
+                    alpha[y * w + x] = 0.76;
+                }
+            }
+        }
+
+        let res = compose_rgba(&DynamicImage::ImageRgb8(rgb), &alpha, true, 1);
+        for y in 16..32 {
+            for x in 23..27 {
+                let a = res.get_pixel(x as u32, y as u32)[3];
+                assert!(
+                    a >= 160,
+                    "white-hot slash core at ({}, {}) was hollowed out: alpha={}",
+                    x,
+                    y,
+                    a
+                );
+            }
+        }
     }
 }

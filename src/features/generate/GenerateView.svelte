@@ -87,6 +87,13 @@
   let settingsHydrated = $state(false);
   let draftHydrated = $state(false);
   let lastLoadedProject = $state<string | null>(null);
+  let lastSyncedProjectStyleKey = $state<string | null>(null);
+
+  function computeProjectStyleKey(): string {
+    const info = appStore.activeProjectInfo;
+    if (!info) return `__none__:${appStore.settings?.activeProject ?? ''}`;
+    return `${info.name}\0${info.style}\0${info.stylePrompt}\0${info.referenceImages.join('\x01')}`;
+  }
 
   $effect(() => {
     const s = appStore.settings;
@@ -152,9 +159,13 @@
   });
 
   $effect(() => {
-    // Re-sync project style & reference images once appStore.projects finishes loading
+    // Re-sync project style & reference images only when active project or its saved style changes
     if (appStore.projects.length >= 0 && appStore.settings) {
-      syncProjectDraft();
+      const styleKey = computeProjectStyleKey();
+      if (lastSyncedProjectStyleKey !== styleKey) {
+        lastSyncedProjectStyleKey = styleKey;
+        syncProjectDraft();
+      }
     }
   });
 
@@ -569,6 +580,12 @@
   onclick={() => {
     if (contextMenu) contextMenu = null;
   }}
+  onkeydown={(e) => {
+    if (e.key === 'Escape') {
+      if (contextMenu) contextMenu = null;
+      if (lightboxAsset) lightboxAsset = null;
+    }
+  }}
 />
 
 <div class="relative flex flex-1 overflow-hidden">
@@ -576,7 +593,7 @@
   <div class="stage-backdrop relative flex flex-1 flex-col overflow-hidden">
     <!-- Top Sub-bar: Gallery Category Filter & Project Drawer Toggle -->
     <div
-      class="flex items-center justify-between border-b border-line bg-ink-0/70 px-5 py-2.5 backdrop-blur-sm"
+      class="flex items-start justify-between gap-3 border-b border-line bg-ink-0/70 px-5 py-2.5 backdrop-blur-sm sm:items-center"
     >
       <div class="flex flex-wrap items-center gap-1.5">
         <span class="mr-1 font-mono text-[10px] font-semibold tracking-wider whitespace-nowrap text-fg-muted uppercase">
@@ -739,8 +756,8 @@
                 e.preventDefault();
                 e.stopPropagation();
                 contextMenu = {
-                  x: Math.min(e.clientX, window.innerWidth - 240),
-                  y: Math.min(e.clientY, window.innerHeight - 340),
+                  x: Math.max(12, Math.min(e.clientX, window.innerWidth - 256)),
+                  y: Math.max(12, Math.min(e.clientY, window.innerHeight - 460)),
                   asset
                 };
               }}
@@ -1491,7 +1508,7 @@
     onclick={(e) => e.stopPropagation()}
     onkeydown={(e) => e.key === 'Escape' && (contextMenu = null)}
     style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
-    class="fixed z-50 flex w-60 flex-col gap-0.5 rounded-xl border border-line-strong bg-ink-1/95 p-2 text-xs shadow-2xl backdrop-blur-xl"
+    class="fixed z-50 flex max-h-[calc(100vh-24px)] w-60 flex-col gap-0.5 overflow-y-auto rounded-xl border border-line-strong bg-ink-1/95 p-2 text-xs shadow-2xl backdrop-blur-xl"
   >
     <!-- Change Asset Category (Archetype) Section -->
     <div class="mb-1 rounded-lg border border-line bg-ink-0/70 p-2">
@@ -1537,13 +1554,30 @@
       onclick={() => {
         const target = contextMenu!.asset;
         contextMenu = null;
-        appStore.openInCharacterForge(target, 'outfit');
+        appStore.openInCharacterForge(
+          target,
+          target.archetype === 'sprite_sheet' ? 'spritesheet' : 'outfit'
+        );
       }}
       class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-semibold text-fg hover:bg-ink-2 hover:text-accent"
     >
       <Sparkles size={13} />
       <span>{i18n.t('asset_send_to_character')}</span>
     </button>
+    {#if contextMenu.asset.archetype !== 'sprite_sheet'}
+      <button
+        type="button"
+        onclick={() => {
+          const target = contextMenu!.asset;
+          contextMenu = null;
+          appStore.openInCharacterForge(target, 'spritesheet');
+        }}
+        class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-fg hover:bg-ink-2 hover:text-accent"
+      >
+        <Layers size={13} />
+        <span>{i18n.t('asset_send_to_spritesheet')}</span>
+      </button>
+    {/if}
     <button
       type="button"
       onclick={() => {

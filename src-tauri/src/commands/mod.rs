@@ -2,7 +2,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::error::{AppError, AppErrorCode, AppResult};
 use crate::library::db::{AssetItem, ProjectInfo};
@@ -1385,6 +1385,39 @@ pub struct AppUpdateInfo {
     pub published_at: String,
 }
 
+pub(crate) fn parse_semver_tuple(s: &str) -> Option<(u64, u64, u64)> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let no_prefix = trimmed.trim_start_matches(['v', 'V']);
+    let core = no_prefix.split(['-', '+']).next()?.trim();
+    if core.is_empty() {
+        return None;
+    }
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse::<u64>().ok()?;
+    let minor = match parts.next() {
+        Some(p) => p.parse::<u64>().ok()?,
+        None => 0,
+    };
+    let patch = match parts.next() {
+        Some(p) => p.parse::<u64>().ok()?,
+        None => 0,
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((major, minor, patch))
+}
+
+pub(crate) fn is_semver_newer(latest: &str, current: &str) -> bool {
+    match (parse_semver_tuple(latest), parse_semver_tuple(current)) {
+        (Some(l), Some(c)) => l > c,
+        _ => false,
+    }
+}
+
 #[tauri::command]
 pub async fn check_app_update(state: State<'_, AppState>) -> AppResult<AppUpdateInfo> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
@@ -1434,15 +1467,13 @@ pub async fn check_app_update(state: State<'_, AppState>) -> AppResult<AppUpdate
         .unwrap_or("")
         .to_string();
 
-    let clean_tag = tag_name.trim_start_matches('v').trim();
-    let clean_current = current_version.trim_start_matches('v').trim();
-
-    let has_update = !clean_tag.is_empty() && clean_tag != clean_current;
+    let clean_tag = tag_name.trim_start_matches(['v', 'V']).trim();
+    let has_update = is_semver_newer(&tag_name, &current_version);
 
     Ok(AppUpdateInfo {
-        current_version,
+        current_version: current_version.clone(),
         latest_version: if clean_tag.is_empty() {
-            "0.2.0".to_string()
+            current_version
         } else {
             tag_name
         },
@@ -1451,6 +1482,30 @@ pub async fn check_app_update(state: State<'_, AppState>) -> AppResult<AppUpdate
         release_notes,
         published_at,
     })
+}
+
+#[tauri::command]
+pub fn get_library_revision(state: State<'_, AppState>) -> AppResult<String> {
+    state.db.get_revision_token()
+}
+
+#[tauri::command]
+pub fn perform_window_close(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    action: String,
+) -> AppResult<()> {
+    if let Some(win) = app.get_webview_window("main") {
+        if action.trim().eq_ignore_ascii_case("tray") {
+            let _ = state.persist_settings();
+            let _ = win.hide();
+        } else {
+            app.exit(0);
+        }
+    } else {
+        app.exit(0);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1482,6 +1537,59 @@ pub fn export_agent_skill_bundle(
     reveal: bool,
 ) -> AppResult<String> {
     crate::mcp::installer::export_skill_bundle(&state.app_data_dir, reveal)
+}
+
+#[tauri::command]
+pub fn list_pose_actions(
+    state: State<'_, AppState>,
+) -> AppResult<Vec<crate::pose3d::PoseActionClip>> {
+    crate::pose3d::ensure_seeded_actions(&state.app_data_dir)
+}
+
+#[tauri::command]
+pub fn save_pose_action(
+    state: State<'_, AppState>,
+    clip: crate::pose3d::PoseActionClip,
+) -> AppResult<crate::pose3d::PoseActionClip> {
+    crate::pose3d::save_pose_action_clip(&state.app_data_dir, clip)
+}
+
+#[tauri::command]
+pub fn delete_pose_action(state: State<'_, AppState>, id: String) -> AppResult<bool> {
+    crate::pose3d::delete_pose_action_clip(&state.app_data_dir, &id)
+}
+
+#[tauri::command]
+pub fn render_pose_action_grid(
+    state: State<'_, AppState>,
+    action_id: String,
+    rows: u32,
+    cols: u32,
+    width: Option<u32>,
+    height: Option<u32>,
+) -> AppResult<String> {
+    let clip = crate::pose3d::get_pose_action(&state.app_data_dir, &action_id)?;
+    let w = width.unwrap_or(1536).clamp(256, 4096);
+    let h = height.unwrap_or(1024).clamp(256, 4096);
+    let png_bytes = crate::pose3d::render_pose_clip_grid_png(&clip, rows, cols, w, h)?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+    Ok(format!("data:image/png;base64,{}", b64))
+}
+
+#[tauri::command]
+pub fn poll_mcp_pose_request(
+    state: State<'_, AppState>,
+) -> AppResult<Option<crate::pose3d::McpPoseBridgeRequest>> {
+    crate::pose3d::poll_bridge_request(&state.app_data_dir)
+}
+
+#[tauri::command]
+pub fn complete_mcp_pose_request(
+    state: State<'_, AppState>,
+    req_id: String,
+    data_url: String,
+) -> AppResult<bool> {
+    crate::pose3d::complete_bridge_request(&state.app_data_dir, &req_id, &data_url)
 }
 
 #[cfg(test)]
@@ -1571,5 +1679,25 @@ mod tests {
         assert!(prompt.contains("CRITICAL BACKGROUND RULE: Pure flat #FFFFFF white backdrop"));
         assert!(prompt.contains("Target Canvas Aspect Ratio & Resolution: 3:2 horizontal landscape (1536x1024px)."));
         assert!(prompt.contains("STRICT AVOID / NEGATIVE CONSTRAINTS: no text"));
+    }
+
+    #[test]
+    fn test_parse_semver_tuple_and_is_semver_newer() {
+        assert_eq!(parse_semver_tuple("v0.2.0"), Some((0, 2, 0)));
+        assert_eq!(parse_semver_tuple("V0.2"), Some((0, 2, 0)));
+        assert_eq!(parse_semver_tuple("1.2.3-beta.1+build"), Some((1, 2, 3)));
+        assert_eq!(parse_semver_tuple("2"), Some((2, 0, 0)));
+        assert_eq!(parse_semver_tuple(""), None);
+        assert_eq!(parse_semver_tuple("v"), None);
+        assert_eq!(parse_semver_tuple("v0.2.x"), None);
+
+        assert!(!is_semver_newer("v0.2.0", "0.2.1"));
+        assert!(!is_semver_newer("v0.2.1", "0.2.1"));
+        assert!(is_semver_newer("v0.2.2", "0.2.1"));
+        assert!(is_semver_newer("v0.3.0", "0.2.1"));
+        assert!(is_semver_newer("v1.0.0", "0.2.1"));
+        assert!(!is_semver_newer("", "0.2.1"));
+        assert!(!is_semver_newer("invalid", "0.2.1"));
+        assert!(is_semver_newer("V0.3", "0.2.1"));
     }
 }

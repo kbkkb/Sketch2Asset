@@ -24,10 +24,17 @@
     PlusCircle,
     ZoomIn,
     ZoomOut,
-    RotateCcw
+    RotateCcw,
+    Move3d,
+    Move,
+    Hand,
+    Maximize2,
+    Trash2,
+    Eye,
+    Check
   } from '@lucide/svelte';
   import { api, assetUrl } from '$lib/api';
-  import type { AssetItem } from '$lib/api/types';
+  import type { AssetItem, PoseActionClip } from '$lib/api/types';
   import { appStore } from '$lib/stores/settings.svelte';
   import { i18n } from '$lib/i18n/index.svelte';
   import { loadPersistedState, savePersistedState } from '$lib/stores/workspace';
@@ -35,10 +42,17 @@
   import { STYLE_PRESETS } from '$features/generate/presets';
   import {
     CHARACTER_MODULES,
-    SPRITE_ACTION_PRESETS,
+    EXPRESSION_PRESETS,
     buildSafeGridGuideDataUrl,
     type CharacterModuleId
   } from './modules';
+  import Pose3DStudio from './Pose3DStudio.svelte';
+  import {
+    BUILTIN_POSE_CLIPS,
+    CAMERA_PRESETS,
+    cloneClip,
+    renderClipToSpriteSheetDataUrl
+  } from './pose3dEngine';
   import {
     detectTurnaroundSplits,
     sliceTurnaroundViews,
@@ -60,6 +74,13 @@
   // Shared Filmstrip Gallery (Read-only asset picker; each module has its OWN independent slots!)
   let charProjectFilter = $state<string>('_all');
   let galleryAssets = $state<AssetItem[]>([]);
+  let previewLightbox = $state<{
+    title: string;
+    dataUrl: string;
+    width?: number;
+    height?: number;
+  } | null>(null);
+  let charContextMenu = $state<{ x: number; y: number; asset: AssetItem } | null>(null);
 
   // ============================================================================
   // MODULE 1: Turnaround & Skinning Studio (三视图与角色换肤 — 独立状态)
@@ -68,6 +89,7 @@
   let designAnchorDataUrl = $state<string>('');
   let designAnchorLabel = $state<string>('');
   let designAnchorAssetId = $state<string>('');
+  let turnaroundAssetId = $state<string>('');
   let designAnchorInputEl = $state<HTMLInputElement | null>(null);
 
   // Sub-panel 1A: Turnaround Sheet (Clean prompt with virtual placeholder)
@@ -179,6 +201,19 @@
   let spriteCharRefLabel = $state<string>('');
   let spriteCharRefAssetId = $state<string>('');
   let spriteCharRefInputEl = $state<HTMLInputElement | null>(null);
+  let showCharRefPicker = $state(false);
+
+  // Slot A2: 序列帧生图专用的「3D 动作姿态参考图」
+  let allPoseClips = $state<PoseActionClip[]>(BUILTIN_POSE_CLIPS.map(cloneClip));
+  let spritePoseRefDataUrl = $state<string>('');
+  let spritePoseRefLabel = $state<string>('');
+  let spritePoseRefIsManual = $state(false);
+  let showPoseRefPicker = $state(false);
+  let quickPoseActionId = $state<string>('none');
+  let quickPoseCameraId = $state<string>('follow_clip');
+  let autoCapture3DPose = $state(true);
+  let externalMcpClip = $state<PoseActionClip | null>(null);
+  let mcpPollTimer: ReturnType<typeof setInterval> | null = null;
 
   // Slot B: 待切帧与动画预览的「序列帧网格大图」
   let spriteSheetCanvas: HTMLCanvasElement | null = null;
@@ -186,8 +221,6 @@
   let spriteSheetAssetId = $state<string>('');
   let sheetFileInputEl = $state<HTMLInputElement | null>(null);
 
-  // Action Preset (Default is 'default' —自由模板，避免被内置动作提示词污染!)
-  let actionPreset = $state('default');
   let gridPreset = $state('2x4');
   let sheetRows = $state(2);
   let sheetCols = $state(4);
@@ -199,6 +232,7 @@
   let spriteSmartIsland = $state(true);
   let spritePreventClip = $state(true);
   let spriteAlignPivot = $state(true);
+  let spritePreserveArc = $state(false);
   let spritePixelClean = $state(false);
   let spriteBaselineRatio = $state(0.86);
   let frameTweaks = $state<FrameTweak[]>([]);
@@ -218,23 +252,32 @@
   let previewZoom = $state(1);
   let previewPanX = $state(0);
   let previewPanY = $state(0);
+  let previewDragMode = $state<'pan' | 'frame'>('pan');
   let previewDragging = $state(false);
-  let previewDragStart = { x: 0, y: 0, px: 0, py: 0 };
+  let previewDraggingFrame = $state(false);
+  let previewDragStart = { x: 0, y: 0, px: 0, py: 0, frameIdx: -1, origDx: 0, origDy: 0 };
 
   // ============================================================================
   // MODULE 3: Expression Sheet Studio (角色表情差分集 — 独立状态)
   // ============================================================================
   let exprCharRefDataUrl = $state<string>('');
   let exprCharRefLabel = $state<string>('');
+  let exprCharRefAssetId = $state<string>('');
+  let exprCharRefInputEl = $state<HTMLInputElement | null>(null);
+  let showExprRefPicker = $state(false);
+  let exprGenMode = $state<'portraits' | 'grid'>('portraits');
+  let selectedExprIds = $state<string[]>(['smile', 'angry', 'sad', 'surprised']);
+  let exprPortraitSize = $state<'auto' | '1024x1536' | '1024x1024' | '1536x1024'>('auto');
+  let exprPortraitResults = $state<
+    { id: string; label: string; dataUrl: string; asset?: AssetItem }[]
+  >([]);
+  let exprProgressText = $state('');
   let exprGrid = $state<'2x2' | '2x3'>('2x3');
   let exprPrompt = $state('');
   let exprSheetCanvas: HTMLCanvasElement | null = null;
   let exprSheetDataUrl = $state<string>('');
+  let exprSheetAssetId = $state<string>('');
   let exprFrames = $state<SpriteFrameItem[]>([]);
-
-  let currentActionPresetObj = $derived(
-    SPRITE_ACTION_PRESETS.find((a) => a.id === actionPreset) ?? SPRITE_ACTION_PRESETS[0]!
-  );
 
   let enabledFrames = $derived(
     spriteFrames.filter((_, idx) => frameTweaks[idx]?.enabled ?? true)
@@ -262,24 +305,189 @@
 
   function handlePreviewPointerDown(e: PointerEvent) {
     if (e.button !== 0 && e.button !== 1) return;
+    const isFrameDrag = (previewDragMode === 'frame' || e.altKey) && e.button === 0 && !!activeDisplayFrame;
     previewDragging = true;
+    previewDraggingFrame = isFrameDrag;
+    const activeIdx = activeDisplayFrame?.index ?? -1;
+    const curTw = activeIdx >= 0 ? frameTweaks[activeIdx] : undefined;
+    if (isFrameDrag) {
+      isPlaying = false;
+    }
     previewDragStart = {
       x: e.clientX,
       y: e.clientY,
       px: previewPanX,
-      py: previewPanY
+      py: previewPanY,
+      frameIdx: activeIdx,
+      origDx: curTw?.dx ?? 0,
+      origDy: curTw?.dy ?? 0
     };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
 
   function handlePreviewPointerMove(e: PointerEvent) {
     if (!previewDragging) return;
-    previewPanX = previewDragStart.px + (e.clientX - previewDragStart.x);
-    previewPanY = previewDragStart.py + (e.clientY - previewDragStart.y);
+    if (previewDraggingFrame && previewDragStart.frameIdx >= 0) {
+      const scale = Math.max(0.25, previewZoom);
+      const deltaX = Math.round((e.clientX - previewDragStart.x) / scale);
+      const deltaY = Math.round((e.clientY - previewDragStart.y) / scale);
+      const targetIdx = previewDragStart.frameIdx;
+      frameTweaks = frameTweaks.map((t, i) =>
+        i === targetIdx
+          ? {
+              ...t,
+              dx: previewDragStart.origDx + deltaX,
+              dy: previewDragStart.origDy + deltaY
+            }
+          : t
+      );
+      rebuildSpriteFrames();
+    } else {
+      previewPanX = previewDragStart.px + (e.clientX - previewDragStart.x);
+      previewPanY = previewDragStart.py + (e.clientY - previewDragStart.y);
+    }
   }
 
   function handlePreviewPointerUp() {
     previewDragging = false;
+    previewDraggingFrame = false;
+  }
+
+  function handleWindowKeyDown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      if (previewLightbox) {
+        e.preventDefault();
+        previewLightbox = null;
+        return;
+      }
+      if (charContextMenu) {
+        e.preventDefault();
+        charContextMenu = null;
+        return;
+      }
+    }
+    if (appStore.activeView !== 'character' || activeModule !== 'spritesheet') return;
+    if (!activeDisplayFrame) return;
+    const el = document.activeElement;
+    if (
+      el &&
+      (el.tagName === 'INPUT' ||
+        el.tagName === 'TEXTAREA' ||
+        el.tagName === 'SELECT' ||
+        (el as HTMLElement).isContentEditable)
+    ) {
+      return;
+    }
+    const step = e.shiftKey ? 5 : 1;
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      isPlaying = false;
+      nudgeCurrentFrame(-step, 0);
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      isPlaying = false;
+      nudgeCurrentFrame(step, 0);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      isPlaying = false;
+      nudgeCurrentFrame(0, -step);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      isPlaying = false;
+      nudgeCurrentFrame(0, step);
+    }
+  }
+
+  async function loadPoseClips() {
+    try {
+      const remote = await api.listPoseActions();
+      if (Array.isArray(remote) && remote.length > 0) {
+        const merged = remote.map((c) => cloneClip(c));
+        for (const b of BUILTIN_POSE_CLIPS) {
+          if (!merged.some((m) => m.id === b.id)) {
+            merged.push(cloneClip(b));
+          }
+        }
+        allPoseClips = merged;
+        if (quickPoseActionId !== 'none' && !merged.some((c) => c.id === quickPoseActionId)) {
+          quickPoseActionId = 'none';
+        }
+        return;
+      }
+    } catch {
+      // Fallback to built-in clips when backend list is unavailable
+    }
+    allPoseClips = BUILTIN_POSE_CLIPS.map(cloneClip);
+  }
+
+  function build3DPoseRefForClip(
+    actionId: string,
+    cameraId: string,
+    rows: number,
+    cols: number,
+    targetW?: number,
+    targetH?: number
+  ): { dataUrl: string; label: string; clip: PoseActionClip } | null {
+    if (!actionId || actionId === 'none') return null;
+    const baseClip =
+      allPoseClips.find((c) => c.id === actionId) ??
+      BUILTIN_POSE_CLIPS.find((c) => c.id === actionId);
+    if (!baseClip) return null;
+    const clip = cloneClip(baseClip);
+    let camLabel = '';
+    if (cameraId !== 'follow_clip') {
+      const camPreset = CAMERA_PRESETS.find((c) => c.id === cameraId);
+      if (camPreset) {
+        clip.camera = {
+          preset: camPreset.id,
+          yaw: camPreset.yaw,
+          pitch: camPreset.pitch,
+          ortho: camPreset.ortho,
+          zoom: camPreset.zoom
+        };
+        camLabel = i18n.locale === 'en' ? camPreset.labelEn : camPreset.label;
+      }
+    } else {
+      const matchedCam = CAMERA_PRESETS.find((c) => c.id === clip.camera?.preset);
+      camLabel = matchedCam
+        ? i18n.locale === 'en'
+          ? matchedCam.labelEn
+          : matchedCam.label
+        : i18n.locale === 'en'
+          ? 'Action Cam'
+          : '动作视角';
+    }
+    const w = targetW ?? (cols > rows ? 1536 : 1024);
+    const h = targetH ?? 1024;
+    const durl = renderClipToSpriteSheetDataUrl(clip, rows, cols, w, h);
+    const clipName = i18n.locale === 'en' ? clip.nameEn || clip.name : clip.name;
+    return {
+      dataUrl: durl,
+      label: `3D: ${clipName} (${camLabel})`,
+      clip
+    };
+  }
+
+  function generateQuick3DPoseRef() {
+    const built = build3DPoseRefForClip(quickPoseActionId, quickPoseCameraId, sheetRows, sheetCols);
+    if (!built) {
+      appStore.toast(
+        'info',
+        i18n.locale === 'en'
+          ? 'Please select a 3D action template first'
+          : '请先在下拉框选择一个具体的 3D 动作模板'
+      );
+      return;
+    }
+    spritePoseRefDataUrl = built.dataUrl;
+    spritePoseRefLabel = built.label;
+    spritePoseRefIsManual = false;
+    appStore.toast(
+      'ok',
+      i18n.locale === 'en'
+        ? `Generated ${sheetRows}×${sheetCols} 3D stickman pose sheet`
+        : `已生成 ${sheetRows}×${sheetCols} 无光照 3D 火柴人动作参考图`
+    );
   }
 
   function resetPreviewTransform() {
@@ -306,7 +514,9 @@
       skinCompareSideBySide: true,
       spriteCharRefAssetId: '',
       spriteSheetAssetId: '',
-      actionPreset: 'default',
+      quickPoseActionId: 'none',
+      quickPoseCameraId: 'follow_clip',
+      autoCapture3DPose: true,
       gridPreset: '2x4',
       sheetRows: 2,
       sheetCols: 4,
@@ -323,6 +533,10 @@
       onionSkin: false,
       showPivotGuide: true,
       previewBackdrop: 'checker' as 'checker' | 'dark' | 'light',
+      exprCharRefAssetId: '',
+      exprGenMode: 'portraits' as 'portraits' | 'grid',
+      selectedExprIds: ['smile', 'angry', 'sad', 'surprised'] as string[],
+      exprPortraitSize: 'auto' as 'auto' | '1024x1536' | '1024x1024' | '1536x1024',
       exprGrid: '2x3' as '2x2' | '2x3',
       exprPrompt: ''
     });
@@ -343,7 +557,9 @@
     skinLockMode = saved.skinLockMode || 'keep_layout';
     skinCompareSideBySide = saved.skinCompareSideBySide ?? true;
 
-    actionPreset = saved.actionPreset || 'default';
+    quickPoseActionId = saved.quickPoseActionId || 'none';
+    quickPoseCameraId = saved.quickPoseCameraId || 'follow_clip';
+    autoCapture3DPose = saved.autoCapture3DPose ?? true;
     gridPreset = saved.gridPreset || '2x4';
     sheetRows = saved.sheetRows ?? 2;
     sheetCols = saved.sheetCols ?? 4;
@@ -360,13 +576,18 @@
     onionSkin = saved.onionSkin ?? false;
     showPivotGuide = saved.showPivotGuide ?? true;
     previewBackdrop = saved.previewBackdrop || 'checker';
+    exprGenMode = saved.exprGenMode === 'grid' ? 'grid' : 'portraits';
+    selectedExprIds = Array.isArray(saved.selectedExprIds)
+      ? saved.selectedExprIds
+      : ['smile', 'angry', 'sad', 'surprised'];
+    exprPortraitSize = saved.exprPortraitSize || 'auto';
     exprGrid = saved.exprGrid || '2x3';
     exprPrompt = saved.exprPrompt || '';
 
     if (appStore.settings?.activeProject) {
       charProjectFilter = appStore.settings.activeProject;
     }
-    await refreshGallery();
+    await Promise.all([refreshGallery(), loadPoseClips()]);
 
     if (appStore.characterPendingAsset) {
       const pending = appStore.characterPendingAsset;
@@ -393,14 +614,46 @@
       if (sheetItem) {
         await loadSpriteSheetAsset(sheetItem, false);
       }
+
+      const exprRefItem = saved.exprCharRefAssetId
+        ? galleryAssets.find((a) => a.id === saved.exprCharRefAssetId)
+        : null;
+      if (exprRefItem) {
+        await setExprCharRefFromAsset(exprRefItem, false);
+      }
     }
 
     charDraftHydrated = true;
     restartAnimTimer();
+
+    window.addEventListener('keydown', handleWindowKeyDown);
+
+    mcpPollTimer = setInterval(async () => {
+      try {
+        const req = await api.pollMcpPoseRequest();
+        if (req && req.reqId && req.action) {
+          externalMcpClip = cloneClip(req.action);
+          const r = req.rows || req.action.defaultRows || 2;
+          const c = req.cols || req.action.defaultCols || 3;
+          const w = req.width || (c > r ? 1536 : 1024);
+          const h = req.height || 1024;
+          const durl = renderClipToSpriteSheetDataUrl(req.action, r, c, w, h);
+          spritePoseRefDataUrl = durl;
+          spritePoseRefLabel = `MCP 3D: ${req.action.name}`;
+          await api.completeMcpPoseRequest(req.reqId, durl);
+        }
+      } catch {
+        // ignore polling error when backend is idle
+      }
+    }, 500);
   });
 
   onDestroy(() => {
     if (animTimer) clearInterval(animTimer);
+    if (mcpPollTimer) clearInterval(mcpPollTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('keydown', handleWindowKeyDown);
+    }
   });
 
   $effect(() => {
@@ -417,6 +670,13 @@
     const _rev = appStore.assetsRevision;
     if (isChar && charDraftHydrated) {
       refreshGallery();
+    }
+  });
+
+  $effect(() => {
+    // 切换至序列帧模块时刷新自定义 3D 动作列表
+    if (appStore.activeView === 'character' && activeModule === 'spritesheet' && charDraftHydrated) {
+      void loadPoseClips();
     }
   });
 
@@ -448,7 +708,9 @@
       skinCompareSideBySide,
       spriteCharRefAssetId,
       spriteSheetAssetId,
-      actionPreset,
+      quickPoseActionId,
+      quickPoseCameraId,
+      autoCapture3DPose,
       gridPreset,
       sheetRows,
       sheetCols,
@@ -465,6 +727,10 @@
       onionSkin,
       showPivotGuide,
       previewBackdrop,
+      exprCharRefAssetId,
+      exprGenMode,
+      selectedExprIds,
+      exprPortraitSize,
       exprGrid,
       exprPrompt
     });
@@ -472,7 +738,7 @@
 
   async function routeAssetFromExternal(
     asset: AssetItem,
-    mode: 'turnaround' | 'outfit' | 'spritesheet'
+    mode: 'turnaround' | 'outfit' | 'spritesheet' | 'expression'
   ) {
     if (mode === 'spritesheet') {
       activeModule = 'spritesheet';
@@ -481,6 +747,9 @@
       } else {
         await setSpriteCharRefFromAsset(asset, true);
       }
+    } else if (mode === 'expression') {
+      activeModule = 'expression';
+      await setExprCharRefFromAsset(asset, true);
     } else {
       activeModule = 'turnaround_skin';
       designTab = mode === 'outfit' ? 'skin' : 'turnaround';
@@ -549,6 +818,7 @@
       designAnchorDataUrl = durl;
       designAnchorLabel = asset.prompt || asset.id;
       designAnchorAssetId = asset.id;
+      turnaroundAssetId = asset.id;
       await loadTurnaroundFromDataUrl(durl);
       if (showToast) {
         appStore.toast(
@@ -614,6 +884,7 @@
       const durl = await api.readImageDataUrl(asset.filePath);
       exprCharRefDataUrl = durl;
       exprCharRefLabel = asset.prompt || asset.id;
+      exprCharRefAssetId = asset.id;
       if (showToast) {
         appStore.toast(
           'ok',
@@ -626,6 +897,110 @@
       appStore.toast(
         'err',
         e?.message ?? (i18n.locale === 'en' ? 'Failed to load reference image' : '加载参考图失败')
+      );
+    }
+  }
+
+  function openCharContextMenu(e: MouseEvent, asset: AssetItem) {
+    e.preventDefault();
+    e.stopPropagation();
+    const x = Math.max(12, Math.min(e.clientX, window.innerWidth - 240));
+    const y = Math.max(12, Math.min(e.clientY, window.innerHeight - 310));
+    charContextMenu = { x, y, asset };
+  }
+
+  async function openAssetInLightbox(target: AssetItem) {
+    try {
+      const durl = await api.readImageDataUrl(target.filePath);
+      previewLightbox = {
+        title: target.prompt || target.filePath,
+        dataUrl: durl,
+        width: target.width,
+        height: target.height
+      };
+    } catch (e: any) {
+      appStore.toast(
+        'err',
+        e?.message ?? (i18n.locale === 'en' ? 'Failed to load image' : '读取图片失败')
+      );
+    }
+  }
+
+  async function handleExportLightboxPng() {
+    if (!previewLightbox) return;
+    try {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const safeTitle =
+        previewLightbox.title
+          .replace(/[^\p{L}\p{N}_-]+/gu, '_')
+          .replace(/^_+|_+$/g, '')
+          .slice(0, 32) || 'character_preview';
+      const outPath = await api.exportStudioPng(
+        previewLightbox.dataUrl,
+        `${safeTitle}_${ts}.png`,
+        true
+      );
+      appStore.toast(
+        'ok',
+        i18n.locale === 'en' ? `Exported PNG: ${outPath}` : `已导出 PNG: ${outPath}`
+      );
+    } catch (e: any) {
+      appStore.toast('err', e?.message ?? (i18n.locale === 'en' ? 'Export failed' : '导出失败'));
+    }
+  }
+
+  async function handleDeleteGalleryAsset(target: AssetItem) {
+    try {
+      await api.deleteAsset(target.id);
+      galleryAssets = galleryAssets.filter((a) => a.id !== target.id);
+      if (designAnchorAssetId === target.id) {
+        designAnchorDataUrl = '';
+        designAnchorLabel = '';
+        designAnchorAssetId = '';
+      }
+      if (turnaroundAssetId === target.id) {
+        turnaroundCanvas = null;
+        turnaroundDataUrl = '';
+        turnaroundWidth = 0;
+        turnaroundHeight = 0;
+        turnaroundAssetId = '';
+        slicedViews = [];
+      }
+      if (skinResultAsset?.id === target.id) {
+        skinResultAsset = null;
+        skinResultDataUrl = '';
+      }
+      if (spriteCharRefAssetId === target.id) {
+        spriteCharRefDataUrl = '';
+        spriteCharRefLabel = '';
+        spriteCharRefAssetId = '';
+      }
+      if (spriteSheetAssetId === target.id) {
+        spriteSheetCanvas = null;
+        spriteSheetDataUrl = '';
+        spriteSheetAssetId = '';
+        spriteFrames = [];
+        frameTweaks = [];
+      }
+      if (exprCharRefAssetId === target.id) {
+        exprCharRefDataUrl = '';
+        exprCharRefLabel = '';
+        exprCharRefAssetId = '';
+      }
+      if (exprSheetAssetId === target.id) {
+        exprSheetCanvas = null;
+        exprSheetDataUrl = '';
+        exprSheetAssetId = '';
+        exprFrames = [];
+      }
+      exprPortraitResults = exprPortraitResults.filter((r) => r.asset?.id !== target.id);
+      await appStore.refreshProjects();
+      appStore.notifyAssetsChanged();
+      appStore.toast('ok', i18n.locale === 'en' ? 'Image deleted' : '已删除图片');
+    } catch (e: any) {
+      appStore.toast(
+        'err',
+        e?.message ?? (i18n.locale === 'en' ? 'Failed to delete image' : '删除图片失败')
       );
     }
   }
@@ -802,6 +1177,7 @@
       designAnchorLabel =
         turnaroundPrompt.trim() || (i18n.locale === 'en' ? 'Character Turnaround' : '角色三视图设定');
       designAnchorAssetId = res.asset.id;
+      turnaroundAssetId = res.asset.id;
       await loadTurnaroundFromDataUrl(res.imageDataUrl);
       appStore.toast(
         'ok',
@@ -984,6 +1360,7 @@
       removeBg: spriteRemoveBg,
       bgTolerance: 34,
       alignPivot: spriteAlignPivot,
+      preserveVerticalArc: spritePreserveArc,
       baselineRatio: spriteBaselineRatio,
       pixelClean: spritePixelClean,
       smartIslandSlice: spriteSmartIsland,
@@ -1073,12 +1450,15 @@
       appStore.openSettings('providers');
       return;
     }
-    if (actionPreset === 'default' && !spriteExtraPrompt.trim()) {
+
+    const willAutoCapturePose =
+      quickPoseActionId !== 'none' && autoCapture3DPose && !spritePoseRefIsManual;
+    if (!willAutoCapturePose && !spritePoseRefDataUrl && !spriteExtraPrompt.trim()) {
       appStore.toast(
         'err',
         i18n.locale === 'en'
-          ? 'Default Template selected: please enter your character & action description below'
-          : '当前为「默认模板」，请在下方提示词框输入想要生成的角色与动作'
+          ? 'Free Motion mode: enter your character & action description below or select a 3D action template'
+          : '当前为「自由动作」，请在下方提示词框输入角色与动作描述，或选择 3D 动作模板'
       );
       return;
     }
@@ -1103,9 +1483,32 @@
       const sheetSize = sheetCols > sheetRows ? '1536x1024' : '1024x1024';
       const [targetW, targetH] = sheetSize === '1536x1024' ? [1536, 1024] : [1024, 1024];
 
-      let primaryRef: string | null = spriteCharRefDataUrl || null;
-      let secondaryRef: string | null = null;
-      if (injectSafeGridGuide) {
+      let selectedClipMeta: PoseActionClip | undefined;
+      if (willAutoCapturePose) {
+        const autoPose = build3DPoseRefForClip(
+          quickPoseActionId,
+          quickPoseCameraId,
+          sheetRows,
+          sheetCols,
+          targetW,
+          targetH
+        );
+        if (autoPose) {
+          spritePoseRefDataUrl = autoPose.dataUrl;
+          spritePoseRefLabel = autoPose.label;
+          selectedClipMeta = autoPose.clip;
+        }
+      } else if (quickPoseActionId !== 'none' && !spritePoseRefIsManual) {
+        selectedClipMeta =
+          allPoseClips.find((c) => c.id === quickPoseActionId) ??
+          BUILTIN_POSE_CLIPS.find((c) => c.id === quickPoseActionId);
+      }
+
+      const effectivePoseRef = spritePoseRefDataUrl;
+      let primaryRef: string | null = spriteCharRefDataUrl || effectivePoseRef || null;
+      let secondaryRef: string | null =
+        spriteCharRefDataUrl && effectivePoseRef ? effectivePoseRef : null;
+      if (!effectivePoseRef && injectSafeGridGuide) {
         const gridGuideUrl = buildSafeGridGuideDataUrl(sheetRows, sheetCols, targetW, targetH);
         if (primaryRef) {
           secondaryRef = gridGuideUrl;
@@ -1114,11 +1517,15 @@
         }
       }
 
-      // 若用户选择了「默认模板 (default)」，不注入任何内置动作套路，完全按用户输入的提示词描述动作！
-      const actionRule = currentActionPresetObj.rule;
       const promptParts = [
-        actionRule,
+        '2D game sprite sheet of sequential character animation frames, uniform phase progression with distinct limb silhouette changes between every consecutive frame (strictly NO duplicate or near-identical adjacent poses).',
+        selectedClipMeta
+          ? `TARGET ACTION MOTION: ${selectedClipMeta.nameEn || selectedClipMeta.name}.`
+          : '',
         spriteExtraPrompt.trim() ? `USER ACTION & CHARACTER SPECIFICATION: ${spriteExtraPrompt.trim()}` : '',
+        effectivePoseRef
+          ? '3D POSE SKELETON CONDITIONING: Strictly follow the sequential keyframe poses, camera perspective, head-to-body ratio, and limb choreography shown in the 3D color-coded stickman reference grid (cyan = left arm/leg, coral/amber = right arm/leg, lime = weapon, slate = torso/head), while replacing the stickman with the full character design!'
+          : '',
         `GRID & SAFE MARGIN RULE: Arrange strictly as a clean ${sheetRows} rows by ${sheetCols} columns grid (${totalFrames} sequential frames total, reading left-to-right, top-to-bottom). Keep each frame's character AND extended weapon/slash effects strictly inside the center 70% safe zone of its own cell with at least 15% white padding around all 4 sides of every cell — NEVER touch the canvas border or cross into adjacent cells! Do NOT draw visible grid lines or numbers.`,
         spriteCharRefDataUrl
           ? 'Strictly keep the exact same character design, proportions, colors, and outfit from the reference character image across all frames.'
@@ -1164,9 +1571,10 @@
       const sheetCv = composeAlignedSpriteSheet(enabledFrames, sheetCols);
       const durl = sheetCv.toDataURL('image/png');
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const actionTag = quickPoseActionId !== 'none' ? quickPoseActionId : 'custom';
       const outPath = await api.exportStudioPng(
         durl,
-        `spritesheet_${actionPreset}_${enabledFrames.length}f_${sheetCv.width}x${sheetCv.height}_${ts}.png`,
+        `spritesheet_${actionTag}_${enabledFrames.length}f_${sheetCv.width}x${sheetCv.height}_${ts}.png`,
         true
       );
       appStore.toast(
@@ -1192,11 +1600,12 @@
         charProjectFilter === '_all'
           ? appStore.settings?.activeProject || ''
           : charProjectFilter;
+      const actionTag = quickPoseActionId !== 'none' ? quickPoseActionId : 'custom';
       await api.saveStudioAsset(
         durl,
         targetProj,
         'sprite_sheet',
-        `SpriteSheet [${actionPreset} ${enabledFrames.length}F Aligned]`
+        `SpriteSheet [${actionTag} ${enabledFrames.length}F Aligned]`
       );
       await Promise.all([refreshGallery(), appStore.refreshProjects()]);
       appStore.notifyAssetsChanged();
@@ -1266,6 +1675,52 @@
     });
   }
 
+  function toggleExprPreset(id: string) {
+    if (selectedExprIds.includes(id)) {
+      selectedExprIds = selectedExprIds.filter((x) => x !== id);
+    } else {
+      selectedExprIds = [...selectedExprIds, id];
+    }
+  }
+
+  async function resolveExprPortraitSize(): Promise<'1024x1536' | '1024x1024' | '1536x1024'> {
+    if (exprPortraitSize !== 'auto') return exprPortraitSize;
+    if (exprCharRefDataUrl) {
+      try {
+        const im = await loadHtmlImage(exprCharRefDataUrl);
+        const w = im.naturalWidth || im.width;
+        const h = im.naturalHeight || im.height;
+        if (w > 0 && h > 0) {
+          const ratio = w / h;
+          if (ratio >= 1.2) return '1536x1024';
+          if (ratio <= 0.82) return '1024x1536';
+          return '1024x1024';
+        }
+      } catch {
+        // ignore decode error and fall back to portrait default
+      }
+    }
+    return '1024x1536';
+  }
+
+  async function handleExportExprPortrait(item: { id: string; label: string; dataUrl: string }) {
+    try {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const safeLabel =
+        item.label
+          .replace(/[^\p{L}\p{N}_-]+/gu, '_')
+          .replace(/^_+|_+$/g, '')
+          .slice(0, 24) || 'expr';
+      const outPath = await api.exportStudioPng(item.dataUrl, `expr_${safeLabel}_${ts}.png`, true);
+      appStore.toast(
+        'ok',
+        i18n.locale === 'en' ? `Exported ${item.label}: ${outPath}` : `已导出 ${item.label}: ${outPath}`
+      );
+    } catch (e: any) {
+      appStore.toast('err', e?.message ?? (i18n.locale === 'en' ? 'Export failed' : '导出失败'));
+    }
+  }
+
   async function handleGenerateExpressionSheet() {
     if (isGenerating) return;
     const prof = appStore.activeProfile;
@@ -1279,6 +1734,109 @@
       appStore.openSettings('providers');
       return;
     }
+
+    const targetProj =
+      charProjectFilter === '_all'
+        ? appStore.settings?.activeProject || ''
+        : charProjectFilter;
+
+    if (exprGenMode === 'portraits') {
+      const customTokens = exprPrompt
+        .split(/[,，\n;；]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const presetItems = EXPRESSION_PRESETS.filter((p) => selectedExprIds.includes(p.id)).map(
+        (p) => ({
+          label: i18n.locale === 'en' ? p.labelEn : p.label,
+          promptExpr: `${p.labelEn} (${p.promptDesc})`
+        })
+      );
+      const customItems = customTokens.map((t) => ({
+        label: t,
+        promptExpr: t
+      }));
+      const exprList = [...presetItems, ...customItems];
+
+      if (exprList.length === 0) {
+        appStore.toast(
+          'err',
+          i18n.locale === 'en'
+            ? 'Please select at least one expression preset or enter custom expressions'
+            : '请至少点选一个表情预设，或在输入框填写自定义表情名称'
+        );
+        return;
+      }
+      if (!exprCharRefDataUrl && !exprPrompt.trim()) {
+        appStore.toast(
+          'err',
+          i18n.locale === 'en'
+            ? 'Please select a reference character portrait first'
+            : '请先上传或从图库选定一张「角色参考立绘」'
+        );
+        return;
+      }
+
+      isGenerating = true;
+      exprProgressText = '';
+      let generatedCount = 0;
+      try {
+        const resolvedSize = await resolveExprPortraitSize();
+        for (let i = 0; i < exprList.length; i++) {
+          const item = exprList[i]!;
+          exprProgressText =
+            i18n.locale === 'en'
+              ? `Generating ${i + 1}/${exprList.length}: ${item.label}...`
+              : `正在生成第 ${i + 1}/${exprList.length} 张：${item.label}...`;
+
+          const portraitPrompt = `Single Full Character Expression Portrait Variant (NOT a multi-panel grid): Strictly keep the exact same character identity, hairstyle, pose, body framing, camera distance/crop, outfit, and pure flat #FFFFFF white background from the reference image. ONLY modify the facial expression to depict: ${item.promptExpr} (adjust eyes, eyebrows, mouth, and subtle blush/emotion cues only).`;
+
+          const res = await api.generateCharacterAsset({
+            profileId: prof.id,
+            model: prof.apiModel,
+            subMode: 'outfit',
+            prompt: portraitPrompt,
+            stylePrompt: getStylePrompt(),
+            size: resolvedSize,
+            project: targetProj,
+            archetype: 'character_card',
+            anchorDataUrl: exprCharRefDataUrl || null,
+            secondaryRefDataUrl: null
+          });
+
+          exprPortraitResults = [
+            ...exprPortraitResults,
+            {
+              id: res.asset?.id || `expr_${Date.now()}_${i}`,
+              label: item.label,
+              dataUrl: res.imageDataUrl,
+              asset: res.asset
+            }
+          ];
+          generatedCount++;
+          await Promise.all([refreshGallery(), appStore.refreshProjects()]);
+          appStore.notifyAssetsChanged();
+        }
+        appStore.toast(
+          'ok',
+          i18n.locale === 'en'
+            ? `Generated ${generatedCount} expression portrait(s)`
+            : `已生成 ${generatedCount} 张同模完整立绘表情差分`
+        );
+      } catch (e: any) {
+        appStore.toast(
+          'err',
+          e?.message ??
+            (i18n.locale === 'en'
+              ? 'Expression portrait generation failed'
+              : '表情立绘生成失败')
+        );
+      } finally {
+        isGenerating = false;
+        exprProgressText = '';
+      }
+      return;
+    }
+
     if (!exprCharRefDataUrl && !exprPrompt.trim()) {
       appStore.toast(
         'err',
@@ -1291,11 +1849,6 @@
 
     isGenerating = true;
     try {
-      const targetProj =
-        charProjectFilter === '_all'
-          ? appStore.settings?.activeProject || ''
-          : charProjectFilter;
-
       const [r, c] = exprGrid === '2x2' ? [2, 2] : [2, 3];
       const exprDesc =
         exprPrompt.trim() ||
@@ -1322,6 +1875,7 @@
         secondaryRefDataUrl: null
       });
 
+      exprSheetAssetId = res.asset.id;
       await Promise.all([refreshGallery(), appStore.refreshProjects()]);
       appStore.notifyAssetsChanged();
       await loadExpressionSheetFromDataUrl(res.imageDataUrl);
@@ -1341,6 +1895,12 @@
     }
   }
 </script>
+
+<svelte:window
+  onclick={() => {
+    if (charContextMenu) charContextMenu = null;
+  }}
+/>
 
 <div class="flex h-full w-full overflow-hidden bg-ink-0 select-none">
   <!-- LEFT SIDEBAR: Modular Character Forge Hub -->
@@ -1376,6 +1936,8 @@
                   <Shirt size={14} class={isActive ? 'text-accent' : 'text-fg-muted'} />
                 {:else if mod.id === 'spritesheet'}
                   <Film size={14} class={isActive ? 'text-accent' : 'text-fg-muted'} />
+                {:else if mod.id === 'pose3d'}
+                  <Move3d size={14} class={isActive ? 'text-accent' : 'text-fg-muted'} />
                 {:else}
                   <Smile size={14} class={isActive ? 'text-accent' : 'text-fg-muted'} />
                 {/if}
@@ -1474,6 +2036,8 @@
                       const durl = String(rd.result || '');
                       designAnchorDataUrl = durl;
                       designAnchorLabel = f.name.replace(/\.[^.]+$/, '');
+                      designAnchorAssetId = '';
+                      turnaroundAssetId = '';
                       loadTurnaroundFromDataUrl(durl);
                     };
                     rd.readAsDataURL(f);
@@ -1567,7 +2131,19 @@
                   </div>
 
                   <div class="relative mx-auto flex max-h-[260px] items-center justify-center overflow-hidden rounded-xl border border-line bg-ink-0 p-2">
-                    <div class="relative inline-block">
+                    <button
+                      type="button"
+                      onclick={() =>
+                        (previewLightbox = {
+                          title:
+                            designAnchorLabel ||
+                            (i18n.locale === 'en' ? 'Character Turnaround' : '角色三视图原图'),
+                          dataUrl: turnaroundDataUrl,
+                          width: turnaroundWidth || undefined,
+                          height: turnaroundHeight || undefined
+                        })}
+                      class="group relative inline-block cursor-zoom-in rounded focus:outline-none"
+                    >
                       <img
                         src={turnaroundDataUrl}
                         alt="Turnaround Sheet"
@@ -1583,7 +2159,11 @@
                           style="left: {split2 * 100}%;"
                         ></div>
                       {/if}
-                    </div>
+                      <span class="pointer-events-none absolute right-2 bottom-2 flex items-center gap-1 rounded-md bg-ink-0/85 px-1.5 py-0.5 text-[10px] font-semibold text-fg opacity-0 shadow transition-opacity group-hover:opacity-100">
+                        <Maximize2 size={11} class="text-accent" />
+                        <span>{i18n.locale === 'en' ? 'Zoom' : '放大'}</span>
+                      </span>
+                    </button>
                   </div>
 
                   <div class="mt-2.5 grid grid-cols-2 gap-4 rounded-xl bg-ink-0/60 px-3 py-2 text-xs">
@@ -1641,8 +2221,16 @@
                           <span class="font-bold text-fg">{viewLabel}</span>
                           <span class="font-mono text-fg-muted">{item.width}×{item.height}</span>
                         </div>
-                        <div
-                          class="flex h-36 items-center justify-center p-2"
+                        <button
+                          type="button"
+                          onclick={() =>
+                            (previewLightbox = {
+                              title: viewLabel,
+                              dataUrl: item.dataUrl,
+                              width: item.width,
+                              height: item.height
+                            })}
+                          class="group relative flex h-36 w-full cursor-zoom-in items-center justify-center p-2 focus:outline-none"
                           style="background-image: linear-gradient(45deg, #1b1e26 25%, transparent 25%), linear-gradient(-45deg, #1b1e26 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #1b1e26 75%), linear-gradient(-45deg, transparent 75%, #1b1e26 75%); background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0;"
                         >
                           <img
@@ -1650,7 +2238,10 @@
                             alt={viewLabel}
                             class="max-h-full max-w-full object-contain"
                           />
-                        </div>
+                          <span class="pointer-events-none absolute right-2 bottom-2 flex items-center gap-1 rounded-md bg-ink-0/85 px-1.5 py-0.5 text-[10px] font-semibold text-fg opacity-0 shadow transition-opacity group-hover:opacity-100">
+                            <ZoomIn size={11} class="text-accent" />
+                          </span>
+                        </button>
                         <div class="flex items-center justify-end gap-1.5 border-t border-line bg-ink-1 px-2 py-1.5">
                           <button
                             type="button"
@@ -1712,6 +2303,8 @@
                       onclick={() => {
                         designAnchorDataUrl = skinResultDataUrl;
                         designAnchorLabel = `Skin: ${skinPrompt.slice(0, 12)}`;
+                        designAnchorAssetId = skinResultAsset?.id ?? '';
+                        turnaroundAssetId = skinResultAsset?.id ?? '';
                         loadTurnaroundFromDataUrl(skinResultDataUrl);
                         designTab = 'turnaround';
                       }}
@@ -1738,13 +2331,24 @@
                     <div class="border-b border-line bg-ink-2/60 px-3 py-1.5 text-xs font-bold text-fg-muted">
                       {i18n.t('char_skin_orig_header')}
                     </div>
-                    <div class="flex flex-1 items-center justify-center p-3">
+                    <button
+                      type="button"
+                      onclick={() =>
+                        (previewLightbox = {
+                          title: i18n.t('char_skin_orig_header'),
+                          dataUrl: designAnchorDataUrl
+                        })}
+                      class="group relative flex flex-1 cursor-zoom-in items-center justify-center p-3 focus:outline-none"
+                    >
                       <img
                         src={designAnchorDataUrl}
                         alt="Original Character"
                         class="max-h-[340px] max-w-full rounded object-contain"
                       />
-                    </div>
+                      <span class="pointer-events-none absolute right-2.5 bottom-2.5 flex items-center gap-1 rounded-md bg-ink-0/85 px-1.5 py-0.5 text-[10px] font-semibold text-fg opacity-0 shadow transition-opacity group-hover:opacity-100">
+                        <Maximize2 size={11} class="text-accent" />
+                      </span>
+                    </button>
                   </div>
                 {/if}
 
@@ -1753,13 +2357,26 @@
                     <div class="border-b border-line bg-accent/10 px-3 py-1.5 text-xs font-extrabold text-accent">
                       {i18n.t('char_skin_new_header')}
                     </div>
-                    <div class="flex flex-1 items-center justify-center p-3">
+                    <button
+                      type="button"
+                      onclick={() =>
+                        (previewLightbox = {
+                          title: i18n.t('char_skin_new_header'),
+                          dataUrl: skinResultDataUrl,
+                          width: skinResultAsset?.width,
+                          height: skinResultAsset?.height
+                        })}
+                      class="group relative flex flex-1 cursor-zoom-in items-center justify-center p-3 focus:outline-none"
+                    >
                       <img
                         src={skinResultDataUrl}
                         alt="New Skin Result"
                         class="max-h-[340px] max-w-full rounded object-contain"
                       />
-                    </div>
+                      <span class="pointer-events-none absolute right-2.5 bottom-2.5 flex items-center gap-1 rounded-md bg-ink-0/85 px-1.5 py-0.5 text-[10px] font-semibold text-fg opacity-0 shadow transition-opacity group-hover:opacity-100">
+                        <Maximize2 size={11} class="text-accent" />
+                      </span>
+                    </button>
                   </div>
                 {:else if !designAnchorDataUrl}
                   <div class="flex flex-col items-center justify-center text-center text-xs text-fg-muted">
@@ -2020,6 +2637,39 @@
                     </div>
                   {/if}
 
+                  <!-- Top-Left Drag Mode Toggle Pill: Pan Canvas vs Drag Frame Character -->
+                  <div
+                    onpointerdown={(e) => e.stopPropagation()}
+                    class="absolute top-2.5 left-2.5 z-30 flex items-center gap-1 rounded-lg border border-line bg-ink-1/90 p-0.5 text-[10px] shadow"
+                  >
+                    <button
+                      type="button"
+                      onclick={() => (previewDragMode = 'pan')}
+                      class="flex items-center gap-1 rounded-md px-2 py-0.5 font-bold transition-colors {previewDragMode === 'pan'
+                        ? 'bg-accent text-accent-ink'
+                        : 'text-fg-muted hover:text-fg'}"
+                    >
+                      <Hand size={10} />
+                      <span>{i18n.locale === 'en' ? 'Pan Canvas' : '拖动画布'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onclick={() => (previewDragMode = 'frame')}
+                      class="flex items-center gap-1 rounded-md px-2 py-0.5 font-bold transition-colors {previewDragMode === 'frame'
+                        ? 'bg-accent text-accent-ink'
+                        : 'text-fg-muted hover:text-fg'}"
+                    >
+                      <Move size={10} />
+                      <span>{i18n.locale === 'en' ? 'Drag Frame (Alt)' : '拖动帧角色 (微调偏移)'}</span>
+                    </button>
+                  </div>
+
+                  <div class="pointer-events-none absolute bottom-2.5 left-2.5 z-30 rounded bg-ink-0/80 px-2 py-0.5 font-mono text-[10px] text-fg-muted">
+                    {i18n.locale === 'en'
+                      ? 'Arrow keys nudge 1px (Shift 5px) · Alt+Drag moves character'
+                      : '方向键微调单帧 1px (Shift 5px) · 按住 Alt 拖拽角色'}
+                  </div>
+
                   {#if previewZoom !== 1 || previewPanX !== 0 || previewPanY !== 0}
                     <button
                       type="button"
@@ -2240,7 +2890,15 @@
                     </div>
                   {/if}
 
-                  <div class="flex items-center gap-2 overflow-x-auto pt-1 pb-0.5">
+                  <div
+                    class="filmstrip-scroll flex items-center gap-2 overflow-x-auto pt-1 pb-1"
+                    onwheel={(e) => {
+                      if (e.deltaY !== 0) {
+                        e.preventDefault();
+                        e.currentTarget.scrollLeft += e.deltaY;
+                      }
+                    }}
+                  >
                     {#each spriteFrames as frame (frame.index)}
                       {@const isFrameEnabled = frameTweaks[frame.index]?.enabled ?? true}
                       {@const isCurrent = activeDisplayFrame?.index === frame.index}
@@ -2406,6 +3064,24 @@
                       <span>{i18n.t('char_align_pivot_label')}</span>
                     </label>
                   </div>
+                  {#if spriteAlignPivot}
+                    <label
+                      class="flex cursor-pointer items-center gap-1.5 pt-0.5 text-[10px] text-fg-muted"
+                      title="默认不勾选（引擎导入模式：所有帧锁定在角色原点，交由 Unity/Godot Rigidbody2D 控制高度）；仅静态展示抛物线时勾选"
+                    >
+                      <input
+                        type="checkbox"
+                        bind:checked={spritePreserveArc}
+                        onchange={() => rebuildSpriteFrames()}
+                        class="accent-accent"
+                      />
+                      <span>
+                        {i18n.locale === 'en'
+                          ? 'Preserve in-canvas jump height (Showcase only; keep OFF for Unity/Godot)'
+                          : '保留画布内跳跃高度差 (展示模式 · 导入Unity/Godot引擎请勿勾选)'}
+                      </span>
+                    </label>
+                  {/if}
                   <div class="flex items-center gap-2 pt-1 text-[11px]">
                     <span class="text-fg-muted">{i18n.t('char_ground_line_label')}</span>
                     <input
@@ -2469,7 +3145,7 @@
                           durl,
                           targetProj,
                           'sprite_sheet',
-                          `SpriteSheet [${actionPreset} ${enabledFrames.length}F]`
+                          `SpriteSheet [${quickPoseActionId !== 'none' ? quickPoseActionId : 'custom'} ${enabledFrames.length}F]`
                         );
                         appStore.notifyAssetsChanged();
                         appStore.openInStudio(saved);
@@ -2503,7 +3179,7 @@
             </span>
           </div>
 
-          <!-- Dedicated Slot: Character Reference Image for Sprite Sheet Generation -->
+          <!-- Dedicated Slot 1: Character Reference Image for Sprite Sheet Generation -->
           <div class="flex flex-col gap-1.5 rounded-xl border border-line bg-ink-0/70 p-2.5">
             <div class="flex items-center justify-between text-[11px]">
               <span class="font-bold text-fg">{i18n.t('char_sprite_ref_slot')}</span>
@@ -2519,20 +3195,52 @@
                     rd.onload = () => {
                       spriteCharRefDataUrl = String(rd.result || '');
                       spriteCharRefLabel = f.name.replace(/\.[^.]+$/, '');
+                      spriteCharRefAssetId = '';
                     };
                     rd.readAsDataURL(f);
                   }
                   (e.currentTarget as HTMLInputElement).value = '';
                 }}
               />
-              <button
-                type="button"
-                onclick={() => spriteCharRefInputEl?.click()}
-                class="text-accent hover:underline"
-              >
-                {spriteCharRefDataUrl ? i18n.t('char_change_ref') : i18n.t('char_upload_portrait')}
-              </button>
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  onclick={() => (showCharRefPicker = !showCharRefPicker)}
+                  class="font-semibold text-accent hover:underline"
+                >
+                  {i18n.locale === 'en' ? 'From Library' : '从图库选择'}
+                </button>
+                <button
+                  type="button"
+                  onclick={() => spriteCharRefInputEl?.click()}
+                  class="font-semibold text-accent hover:underline"
+                >
+                  {spriteCharRefDataUrl ? i18n.t('char_change_ref') : i18n.t('char_upload_portrait')}
+                </button>
+              </div>
             </div>
+
+            {#if showCharRefPicker && galleryAssets.length > 0}
+              <div class="grid max-h-28 grid-cols-5 gap-1.5 overflow-y-auto rounded-lg border border-line bg-ink-1 p-1.5">
+                {#each galleryAssets.slice(0, 25) as item (item.id)}
+                  <button
+                    type="button"
+                    title={item.prompt || item.id}
+                    onclick={() => {
+                      setSpriteCharRefFromAsset(item, true);
+                      showCharRefPicker = false;
+                    }}
+                    class="h-10 w-10 overflow-hidden rounded border border-line bg-ink-0 p-0.5 hover:border-accent"
+                  >
+                    <img
+                      src={assetUrl(item.filePath)}
+                      alt={item.prompt}
+                      class="h-full w-full object-contain"
+                    />
+                  </button>
+                {/each}
+              </div>
+            {/if}
 
             {#if spriteCharRefDataUrl}
               <div class="flex items-center justify-between gap-2 rounded-lg border border-accent/40 bg-accent/10 px-2 py-1.5">
@@ -2568,17 +3276,164 @@
             {/if}
           </div>
 
-          <!-- Action Preset Dropdown (Default option first to avoid built-in prompt pollution) -->
-          <div class="flex flex-col gap-1 text-xs">
-            <span class="text-[11px] font-semibold text-fg-muted">{i18n.t('char_action_preset_label')}</span>
-            <select
-              bind:value={actionPreset}
-              class="w-full rounded-lg border border-line bg-ink-0 px-2.5 py-1.5 text-xs font-semibold text-fg outline-none focus:border-accent"
-            >
-              {#each SPRITE_ACTION_PRESETS as act (act.id)}
-                <option value={act.id}>{i18n.locale === 'en' ? act.labelEn : act.label}</option>
-              {/each}
-            </select>
+          <!-- Dedicated Slot 2: Unified 3D Action & Pose Reference Selector -->
+          <div class="flex flex-col gap-2 rounded-xl border border-line bg-ink-0/70 p-2.5">
+            <div class="flex items-center justify-between text-[11px]">
+              <span class="flex items-center gap-1 font-bold text-fg">
+                <Move3d size={12} class="text-accent" />
+                <span>{i18n.locale === 'en' ? '3D Action Reference' : '3D 动作参考引导'}</span>
+              </span>
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  onclick={() => (showPoseRefPicker = !showPoseRefPicker)}
+                  class="text-[10px] font-semibold text-fg-muted hover:text-accent"
+                >
+                  {i18n.locale === 'en' ? 'Pick Asset' : '选图库'}
+                </button>
+                <button
+                  type="button"
+                  onclick={() => (activeModule = 'pose3d')}
+                  class="font-bold text-accent hover:underline"
+                >
+                  {i18n.locale === 'en' ? '3D Studio (MOD-04)' : '去 3D 工坊编辑 (MOD-04)'}
+                </button>
+              </div>
+            </div>
+
+            {#if showPoseRefPicker && galleryAssets.length > 0}
+              <div class="grid max-h-28 grid-cols-5 gap-1.5 overflow-y-auto rounded-lg border border-line bg-ink-1 p-1.5">
+                {#each galleryAssets.slice(0, 25) as item (item.id)}
+                  <button
+                    type="button"
+                    title={item.prompt || item.id}
+                    onclick={async () => {
+                      spritePoseRefDataUrl = await api.readImageDataUrl(item.filePath);
+                      spritePoseRefLabel = item.prompt || item.id;
+                      spritePoseRefIsManual = true;
+                      showPoseRefPicker = false;
+                    }}
+                    class="h-10 w-10 overflow-hidden rounded border border-line bg-ink-0 p-0.5 hover:border-accent"
+                  >
+                    <img
+                      src={assetUrl(item.filePath)}
+                      alt={item.prompt}
+                      class="h-full w-full object-contain"
+                    />
+                  </button>
+                {/each}
+              </div>
+            {/if}
+
+            <!-- Unified 3D Action + Camera Preset Controls -->
+            <div class="flex flex-col gap-1.5 text-[11px]">
+              <select
+                bind:value={quickPoseActionId}
+                onchange={() => {
+                  spritePoseRefIsManual = false;
+                  if (quickPoseActionId === 'none') {
+                    spritePoseRefDataUrl = '';
+                    spritePoseRefLabel = '';
+                  }
+                }}
+                class="w-full rounded-lg border border-line bg-ink-0 px-2 py-1.5 text-[11px] font-semibold text-fg outline-none focus:border-accent"
+              >
+                <option value="none">
+                  {i18n.locale === 'en'
+                    ? 'Free Motion (Prompt Only)'
+                    : '自由动作 (仅靠提示词生成)'}
+                </option>
+                {#each allPoseClips as clip (clip.id)}
+                  <option value={clip.id}>
+                    {!clip.builtin ? '★ ' : ''}{i18n.locale === 'en' ? clip.nameEn || clip.name : clip.name}
+                  </option>
+                {/each}
+              </select>
+
+              <div class="flex items-center gap-1.5">
+                <select
+                  bind:value={quickPoseCameraId}
+                  onchange={() => {
+                    spritePoseRefIsManual = false;
+                  }}
+                  class="min-w-0 flex-1 rounded-lg border border-line bg-ink-0 px-2 py-1 text-[11px] font-semibold text-fg outline-none focus:border-accent"
+                >
+                  <option value="follow_clip">
+                    {i18n.locale === 'en' ? 'Follow Action Cam' : '遵循动作视角'}
+                  </option>
+                  <option value="side_2d">
+                    {i18n.locale === 'en' ? '2D Side (Right)' : '2D横版 (朝右)'}
+                  </option>
+                  <option value="side_2d_left">
+                    {i18n.locale === 'en' ? '2D Side (Left)' : '2D横版 (朝左)'}
+                  </option>
+                  <option value="hd2d_45">
+                    {i18n.locale === 'en' ? 'HD-2D 45°' : 'HD-2D 斜45°'}
+                  </option>
+                  <option value="topdown_34">
+                    {i18n.locale === 'en' ? '3/4 Top-Down' : '3/4 俯视'}
+                  </option>
+                </select>
+                <button
+                  type="button"
+                  onclick={generateQuick3DPoseRef}
+                  disabled={quickPoseActionId === 'none'}
+                  class="shrink-0 rounded-lg bg-accent/15 px-2.5 py-1 text-[10px] font-extrabold text-accent hover:bg-accent hover:text-accent-ink disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {i18n.locale === 'en' ? 'Preview 3D Ref' : '预览 3D 参考图'}
+                </button>
+              </div>
+
+              <label class="flex cursor-pointer items-center gap-1.5 pt-0.5 text-[10px] text-fg-muted">
+                <input type="checkbox" bind:checked={autoCapture3DPose} class="accent-accent" />
+                <span>
+                  {i18n.locale === 'en'
+                    ? 'Auto-capture 3D sequence ref on generate'
+                    : '生图时自动拍取 3D 序列参考图'}
+                </span>
+              </label>
+            </div>
+
+            {#if spritePoseRefDataUrl}
+              <div class="flex items-center justify-between gap-2 rounded-lg border border-accent/40 bg-accent/10 px-2 py-1.5">
+                <div class="flex min-w-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onclick={() =>
+                      (previewLightbox = {
+                        title: spritePoseRefLabel || '3D Pose Grid',
+                        dataUrl: spritePoseRefDataUrl
+                      })}
+                    class="shrink-0 cursor-zoom-in rounded border border-line bg-white p-0.5 hover:border-accent"
+                  >
+                    <img
+                      src={spritePoseRefDataUrl}
+                      alt="3D Pose Ref"
+                      class="h-9 w-12 object-contain"
+                    />
+                  </button>
+                  <div class="flex min-w-0 flex-col">
+                    <span class="truncate text-[11px] font-bold text-accent">
+                      {spritePoseRefLabel || '3D Pose Grid'}
+                    </span>
+                    <span class="text-[10px] text-fg-muted">
+                      {i18n.locale === 'en' ? 'Guides frame-by-frame pose' : '引导逐帧骨骼姿态与透视'}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onclick={() => {
+                    spritePoseRefDataUrl = '';
+                    spritePoseRefLabel = '';
+                    spritePoseRefIsManual = false;
+                  }}
+                  class="text-fg-muted hover:text-err"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            {/if}
           </div>
 
           <div class="flex flex-col gap-1 text-xs">
@@ -2628,7 +3483,9 @@
             <textarea
               rows="5"
               bind:value={spriteExtraPrompt}
-              placeholder={i18n.locale === 'en' ? currentActionPresetObj.placeholderEn : currentActionPresetObj.placeholder}
+              placeholder={i18n.locale === 'en'
+                ? 'Describe character & sequential motion (or supplement outfit/weapon details when using a 3D action ref)...'
+                : '输入角色与连续动作描述（如已选 3D 动作模板，可仅补充角色造型/武器细节，例如：身穿黑红铠甲的武士挥舞火焰太刀）...'}
               class="w-full resize-y rounded-xl border border-line bg-ink-0 p-2.5 text-xs leading-relaxed text-fg outline-none focus:border-accent"
             ></textarea>
           </div>
@@ -2662,7 +3519,136 @@
     {:else if activeModule === 'expression'}
       <div class="flex min-h-0 flex-1 overflow-hidden">
         <div class="flex min-w-0 flex-1 flex-col overflow-y-auto p-4">
-          {#if exprSheetDataUrl}
+          {#if exprGenMode === 'portraits'}
+            {#if exprPortraitResults.length > 0 || (isGenerating && exprProgressText)}
+              <div class="flex flex-col gap-4 rounded-2xl border border-line bg-ink-1/90 p-4 shadow-lg">
+                <div class="flex flex-wrap items-center justify-between gap-2 border-b border-line pb-2.5">
+                  <div class="flex items-center gap-2">
+                    <Smile size={16} class="text-accent" />
+                    <span class="text-xs font-extrabold text-fg">
+                      {i18n.locale === 'en'
+                        ? `Character Expression Portraits (${exprPortraitResults.length})`
+                        : `同模完整立绘表情差分 (${exprPortraitResults.length} 张)`}
+                    </span>
+                    {#if isGenerating && exprProgressText}
+                      <span class="flex items-center gap-1.5 rounded-full bg-accent/15 px-2.5 py-0.5 text-[11px] font-bold text-accent">
+                        <Loader2 size={11} class="animate-spin" />
+                        <span>{exprProgressText}</span>
+                      </span>
+                    {/if}
+                  </div>
+                  {#if exprPortraitResults.length > 0 && !isGenerating}
+                    <button
+                      type="button"
+                      onclick={() => (exprPortraitResults = [])}
+                      class="flex items-center gap-1 rounded-lg border border-line bg-ink-2 px-2.5 py-1 text-[11px] font-semibold text-fg-muted hover:border-err hover:text-err"
+                    >
+                      <Trash2 size={11} />
+                      <span>{i18n.locale === 'en' ? 'Clear List' : '清空结果'}</span>
+                    </button>
+                  {/if}
+                </div>
+
+                {#if exprPortraitResults.length > 0}
+                  <div class="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                    {#each exprPortraitResults as item (item.id)}
+                      <div class="flex flex-col overflow-hidden rounded-xl border border-line bg-ink-0 shadow-sm">
+                        <div class="flex items-center justify-between border-b border-line bg-ink-2/60 px-2.5 py-1.5 text-[11px]">
+                          <span class="truncate font-extrabold text-fg">{item.label}</span>
+                          {#if item.asset}
+                            <span class="shrink-0 font-mono text-[10px] text-fg-muted">
+                              {item.asset.width}×{item.asset.height}
+                            </span>
+                          {/if}
+                        </div>
+
+                        <button
+                          type="button"
+                          onclick={() =>
+                            (previewLightbox = {
+                              title: item.label,
+                              dataUrl: item.dataUrl,
+                              width: item.asset?.width,
+                              height: item.asset?.height
+                            })}
+                          class="checkerboard group relative flex h-64 w-full cursor-zoom-in items-center justify-center p-2 focus:outline-none"
+                        >
+                          <img
+                            src={item.dataUrl}
+                            alt={item.label}
+                            class="max-h-full max-w-full rounded object-contain"
+                          />
+                          <span class="pointer-events-none absolute right-2 bottom-2 flex items-center gap-1 rounded-md bg-ink-0/85 px-1.5 py-0.5 text-[10px] font-semibold text-fg opacity-0 shadow transition-opacity group-hover:opacity-100">
+                            <Maximize2 size={11} class="text-accent" />
+                            <span>{i18n.locale === 'en' ? 'Zoom' : '放大'}</span>
+                          </span>
+                        </button>
+
+                        <div class="flex flex-wrap items-center justify-between gap-1.5 border-t border-line bg-ink-1 px-2 py-2 text-[11px]">
+                          {#if item.asset}
+                            <button
+                              type="button"
+                              onclick={() => appStore.openInStudio(item.asset!)}
+                              class="flex items-center gap-1 rounded-md bg-accent px-2 py-1 font-extrabold text-accent-ink hover:brightness-105"
+                            >
+                              <Sliders size={11} />
+                              <span>{i18n.locale === 'en' ? 'To Studio' : '送入工作台抠图'}</span>
+                            </button>
+                          {/if}
+                          <div class="ml-auto flex items-center gap-1">
+                            <button
+                              type="button"
+                              onclick={() => {
+                                exprCharRefDataUrl = item.dataUrl;
+                                exprCharRefLabel = item.label;
+                                exprCharRefAssetId = item.asset?.id ?? '';
+                                appStore.toast(
+                                  'ok',
+                                  i18n.locale === 'en'
+                                    ? `Set "${item.label}" as reference portrait`
+                                    : `已将「${item.label}」设为参考立绘`
+                                );
+                              }}
+                              class="rounded-md border border-line bg-ink-2 px-2 py-1 font-semibold text-fg hover:border-accent hover:text-accent"
+                            >
+                              {i18n.locale === 'en' ? 'Use as Ref' : '设为参考图'}
+                            </button>
+                            <button
+                              type="button"
+                              onclick={() => handleExportExprPortrait(item)}
+                              class="flex items-center gap-1 rounded-md bg-accent/15 px-2 py-1 font-bold text-accent hover:bg-accent hover:text-accent-ink"
+                            >
+                              <Download size={11} />
+                              <span>{i18n.t('char_export_png')}</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                {:else}
+                  <div class="flex h-52 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-line bg-ink-0/60 text-xs text-fg-muted">
+                    <Loader2 size={24} class="animate-spin text-accent" />
+                    <span class="font-semibold text-fg">{exprProgressText}</span>
+                  </div>
+                {/if}
+              </div>
+            {:else}
+              <div class="flex flex-1 flex-col items-center justify-center rounded-2xl border border-dashed border-line bg-ink-1/40 p-8 text-center">
+                <Smile size={36} class="mb-2 text-accent" />
+                <h3 class="text-sm font-extrabold text-fg">
+                  {i18n.locale === 'en'
+                    ? 'Single Full Expression Portrait Studio'
+                    : '同模单张完整立绘表情差分工作台'}
+                </h3>
+                <p class="mt-1 max-w-md text-xs text-fg-muted">
+                  {i18n.locale === 'en'
+                    ? 'Select a Reference Character Portrait on the right, pick target expressions, and batch-generate identity-locked full portraits.'
+                    : '在右侧锁定一张「角色参考立绘」，勾选所需表情预设（可叠加自定义表情），即可批量生成姿势、服装与比例完全一致的高清表情立绘。'}
+                </p>
+              </div>
+            {/if}
+          {:else if exprSheetDataUrl}
             <div class="flex flex-col gap-4 rounded-2xl border border-line bg-ink-1/90 p-4 shadow-lg">
               <div class="flex items-center justify-between border-b border-line pb-2.5">
                 <div class="flex items-center gap-2">
@@ -2675,7 +3661,22 @@
               <div class="grid grid-cols-3 gap-3">
                 {#each exprFrames as ef (ef.index)}
                   <div class="flex flex-col items-center rounded-xl border border-line bg-ink-0 p-3">
-                    <img src={ef.dataUrl} alt="Expr #{ef.index + 1}" class="h-32 w-32 object-contain" />
+                    <button
+                      type="button"
+                      onclick={() =>
+                        (previewLightbox = {
+                          title: `${i18n.t('char_expr_item')} #${ef.index + 1}`,
+                          dataUrl: ef.dataUrl,
+                          width: ef.width,
+                          height: ef.height
+                        })}
+                      class="checkerboard group relative flex h-36 w-full cursor-zoom-in items-center justify-center rounded-lg p-2 focus:outline-none"
+                    >
+                      <img src={ef.dataUrl} alt="Expr #{ef.index + 1}" class="max-h-32 max-w-full object-contain" />
+                      <span class="pointer-events-none absolute right-2 bottom-2 rounded-md bg-ink-0/85 p-1 opacity-0 shadow transition-opacity group-hover:opacity-100">
+                        <Maximize2 size={11} class="text-accent" />
+                      </span>
+                    </button>
                     <div class="mt-2 flex w-full items-center justify-between border-t border-line pt-2 text-[11px]">
                       <span class="font-mono font-bold text-fg-muted">{i18n.t('char_expr_item')} #{ef.index + 1}</span>
                       <button
@@ -2707,39 +3708,295 @@
 
         <aside class="flex w-80 shrink-0 flex-col gap-3 overflow-y-auto border-l border-line bg-ink-1/95 p-3.5">
           <span class="text-xs font-extrabold text-fg">{i18n.t('char_expr_cfg_title')}</span>
+
+          <!-- Dedicated Slot: Reference Character Portrait for MOD-03 -->
+          <div class="flex flex-col gap-1.5 rounded-xl border border-line bg-ink-0/70 p-2.5">
+            <div class="flex items-center justify-between text-[11px]">
+              <span class="font-bold text-fg">
+                {i18n.locale === 'en' ? 'Reference Portrait' : '角色参考立绘'}
+              </span>
+              <input
+                bind:this={exprCharRefInputEl}
+                type="file"
+                accept="image/*"
+                class="hidden"
+                onchange={(e) => {
+                  const f = (e.currentTarget as HTMLInputElement).files?.[0];
+                  if (f) {
+                    const rd = new FileReader();
+                    rd.onload = () => {
+                      exprCharRefDataUrl = String(rd.result || '');
+                      exprCharRefLabel = f.name.replace(/\.[^.]+$/, '');
+                      exprCharRefAssetId = '';
+                    };
+                    rd.readAsDataURL(f);
+                  }
+                  (e.currentTarget as HTMLInputElement).value = '';
+                }}
+              />
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  onclick={() => (showExprRefPicker = !showExprRefPicker)}
+                  class="font-semibold text-accent hover:underline"
+                >
+                  {i18n.locale === 'en' ? 'From Library' : '从图库选择'}
+                </button>
+                <button
+                  type="button"
+                  onclick={() => exprCharRefInputEl?.click()}
+                  class="font-semibold text-accent hover:underline"
+                >
+                  {exprCharRefDataUrl ? i18n.t('char_change_ref') : i18n.t('char_upload_portrait')}
+                </button>
+              </div>
+            </div>
+
+            {#if showExprRefPicker && galleryAssets.length > 0}
+              <div class="grid max-h-28 grid-cols-5 gap-1.5 overflow-y-auto rounded-lg border border-line bg-ink-1 p-1.5">
+                {#each galleryAssets.slice(0, 25) as item (item.id)}
+                  <button
+                    type="button"
+                    title={item.prompt || item.id}
+                    onclick={() => {
+                      setExprCharRefFromAsset(item, true);
+                      showExprRefPicker = false;
+                    }}
+                    class="h-10 w-10 overflow-hidden rounded border border-line bg-ink-0 p-0.5 hover:border-accent"
+                  >
+                    <img
+                      src={assetUrl(item.filePath)}
+                      alt={item.prompt}
+                      class="h-full w-full object-contain"
+                    />
+                  </button>
+                {/each}
+              </div>
+            {/if}
+
+            {#if exprCharRefDataUrl}
+              <div class="flex items-center justify-between gap-2 rounded-lg border border-accent/40 bg-accent/10 px-2 py-1.5">
+                <div class="flex min-w-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onclick={() =>
+                      (previewLightbox = {
+                        title: exprCharRefLabel || (i18n.locale === 'en' ? 'Reference Portrait' : '角色参考立绘'),
+                        dataUrl: exprCharRefDataUrl
+                      })}
+                    class="shrink-0 cursor-zoom-in rounded border border-line bg-ink-0 p-0.5 hover:border-accent"
+                  >
+                    <img
+                      src={exprCharRefDataUrl}
+                      alt="Expression Character Ref"
+                      class="h-9 w-9 object-contain"
+                    />
+                  </button>
+                  <div class="flex min-w-0 flex-col">
+                    <span class="truncate text-[11px] font-bold text-accent">
+                      {exprCharRefLabel || 'Locked'}
+                    </span>
+                    <span class="text-[10px] text-fg-muted">
+                      {i18n.locale === 'en' ? 'Identity & pose anchor' : '锁定角色脸型、服饰与姿势'}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onclick={() => {
+                    exprCharRefDataUrl = '';
+                    exprCharRefLabel = '';
+                    exprCharRefAssetId = '';
+                  }}
+                  class="text-fg-muted hover:text-err"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            {:else}
+              <div class="text-[10px] text-fg-dim">
+                {i18n.locale === 'en'
+                  ? 'Upload portrait, pick from library, or click an asset in the bottom strip'
+                  : '上传立绘、从图库选取，或点击底部资产栏一键设为参考立绘'}
+              </div>
+            {/if}
+          </div>
+
+          <!-- Generation Mode Toggle -->
           <div class="flex flex-col gap-1">
-            <span class="text-[11px] font-semibold text-fg-muted">{i18n.t('char_grid_spec_label')}</span>
-            <select
-              bind:value={exprGrid}
-              onchange={() => rebuildExpressionSlices()}
-              class="w-full rounded-lg border border-line bg-ink-0 px-2.5 py-1.5 text-xs font-semibold text-fg"
+            <span class="text-[11px] font-semibold text-fg-muted">
+              {i18n.locale === 'en' ? 'Generation Mode' : '生成模式'}
+            </span>
+            <div class="grid grid-cols-1 gap-1 rounded-xl border border-line bg-ink-0 p-1 text-[11px]">
+              <button
+                type="button"
+                onclick={() => (exprGenMode = 'portraits')}
+                class="rounded-lg px-2.5 py-1.5 text-left font-bold transition-colors {exprGenMode === 'portraits'
+                  ? 'bg-accent text-accent-ink shadow-sm'
+                  : 'text-fg-muted hover:bg-ink-2 hover:text-fg'}"
+              >
+                {i18n.locale === 'en'
+                  ? 'Single Full Portraits (Recommended)'
+                  : '单张完整立绘差分 (推荐 · 默认)'}
+              </button>
+              <button
+                type="button"
+                onclick={() => (exprGenMode = 'grid')}
+                class="rounded-lg px-2.5 py-1.5 text-left font-bold transition-colors {exprGenMode === 'grid'
+                  ? 'bg-accent text-accent-ink shadow-sm'
+                  : 'text-fg-muted hover:bg-ink-2 hover:text-fg'}"
+              >
+                {i18n.locale === 'en'
+                  ? 'Overview Grid Sheet (2×2 / 2×3)'
+                  : '网格速览合集 (2×2 / 2×3)'}
+              </button>
+            </div>
+          </div>
+
+          {#if exprGenMode === 'portraits'}
+            <div class="flex flex-col gap-1.5">
+              <div class="flex items-center justify-between">
+                <span class="text-[11px] font-semibold text-fg-muted">
+                  {i18n.locale === 'en' ? 'Expression Presets (Multi-select)' : '表情预设多选'}
+                </span>
+                <span class="font-mono text-[10px] font-bold text-accent">
+                  {selectedExprIds.length} {i18n.locale === 'en' ? 'selected' : '项已选'}
+                </span>
+              </div>
+              <div class="flex flex-wrap gap-1.5">
+                {#each EXPRESSION_PRESETS as preset (preset.id)}
+                  {@const active = selectedExprIds.includes(preset.id)}
+                  <button
+                    type="button"
+                    onclick={() => toggleExprPreset(preset.id)}
+                    class="flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-semibold transition-all {active
+                      ? 'border-accent bg-accent/15 text-accent'
+                      : 'border-line bg-ink-0 text-fg-muted hover:text-fg'}"
+                  >
+                    {#if active}
+                      <Check size={10} strokeWidth={2.5} />
+                    {/if}
+                    <span>{i18n.locale === 'en' ? preset.labelEn : `${preset.label} ${preset.labelEn}`}</span>
+                  </button>
+                {/each}
+              </div>
+            </div>
+
+            <div class="flex flex-col gap-1">
+              <span class="text-[11px] font-semibold text-fg-muted">
+                {i18n.locale === 'en' ? 'Portrait Resolution' : '单张立绘分辨率'}
+              </span>
+              <select
+                bind:value={exprPortraitSize}
+                class="w-full rounded-lg border border-line bg-ink-0 px-2.5 py-1.5 text-xs font-semibold text-fg outline-none focus:border-accent"
+              >
+                <option value="auto">
+                  {i18n.locale === 'en' ? 'Auto Match Reference Ratio' : '自动匹配参考图比例'}
+                </option>
+                <option value="1024x1536">1024 × 1536 (竖屏立绘)</option>
+                <option value="1024x1024">1024 × 1024 (1:1 方图)</option>
+                <option value="1536x1024">1536 × 1024 (3:2 横图)</option>
+              </select>
+            </div>
+
+            <div class="flex flex-col gap-1">
+              <span class="text-[11px] font-semibold text-fg-muted">
+                {i18n.locale === 'en' ? 'Custom Expressions (Optional)' : '自定义附加表情 (可选 · 逗号或换行分隔)'}
+              </span>
+              <textarea
+                rows="3"
+                bind:value={exprPrompt}
+                placeholder={i18n.locale === 'en'
+                  ? 'Optional extra expressions separated by comma or newline (e.g. wink, sleepy, battle cry)...'
+                  : '可选补充自定义表情，逗号或换行分隔（如：眨眼wink, 困倦打哈欠, 战吼）...'}
+                class="w-full resize-y rounded-xl border border-line bg-ink-0 p-2.5 text-xs leading-relaxed text-fg outline-none focus:border-accent"
+              ></textarea>
+            </div>
+
+            <button
+              type="button"
+              onclick={handleGenerateExpressionSheet}
+              disabled={isGenerating}
+              class="flex w-full items-center justify-center gap-2 rounded-xl bg-accent py-2.5 text-xs font-extrabold text-accent-ink shadow-md hover:brightness-105 disabled:opacity-50"
             >
-              <option value="2x3">2 × 3 (6 Expressions)</option>
-              <option value="2x2">2 × 2 (4 Expressions)</option>
-            </select>
-          </div>
+              {#if isGenerating}
+                <Loader2 size={15} class="animate-spin" />
+                <span class="truncate">{exprProgressText || (i18n.locale === 'en' ? 'Generating...' : '生成中...')}</span>
+              {:else}
+                <Sparkles size={15} />
+                <span>
+                  {i18n.locale === 'en' ? 'Generate Expression Portraits' : '批量生成单张表情立绘'}
+                </span>
+              {/if}
+            </button>
+          {:else}
+            <div class="flex flex-col gap-1">
+              <span class="text-[11px] font-semibold text-fg-muted">{i18n.t('char_grid_spec_label')}</span>
+              <select
+                bind:value={exprGrid}
+                onchange={() => rebuildExpressionSlices()}
+                class="w-full rounded-lg border border-line bg-ink-0 px-2.5 py-1.5 text-xs font-semibold text-fg"
+              >
+                <option value="2x3">2 × 3 (6 Expressions)</option>
+                <option value="2x2">2 × 2 (4 Expressions)</option>
+              </select>
+            </div>
 
-          <div class="flex flex-col gap-1">
-            <span class="text-[11px] font-semibold text-fg-muted">{i18n.t('char_expr_prompt_label')}</span>
-            <textarea
-              rows="5"
-              bind:value={exprPrompt}
-              placeholder={i18n.t('char_expr_prompt_ph')}
-              class="w-full resize-y rounded-xl border border-line bg-ink-0 p-2.5 text-xs leading-relaxed text-fg outline-none focus:border-accent"
-            ></textarea>
-          </div>
+            <div class="flex flex-col gap-1">
+              <span class="text-[11px] font-semibold text-fg-muted">{i18n.t('char_expr_prompt_label')}</span>
+              <textarea
+                rows="5"
+                bind:value={exprPrompt}
+                placeholder={i18n.t('char_expr_prompt_ph')}
+                class="w-full resize-y rounded-xl border border-line bg-ink-0 p-2.5 text-xs leading-relaxed text-fg outline-none focus:border-accent"
+              ></textarea>
+            </div>
 
-          <button
-            type="button"
-            onclick={handleGenerateExpressionSheet}
-            disabled={isGenerating}
-            class="flex w-full items-center justify-center gap-2 rounded-xl bg-accent py-2.5 text-xs font-extrabold text-accent-ink shadow-md"
-          >
-            <Sparkles size={15} />
-            <span>{i18n.t('char_generate_expr_btn')}</span>
-          </button>
+            <button
+              type="button"
+              onclick={handleGenerateExpressionSheet}
+              disabled={isGenerating}
+              class="flex w-full items-center justify-center gap-2 rounded-xl bg-accent py-2.5 text-xs font-extrabold text-accent-ink shadow-md hover:brightness-105 disabled:opacity-50"
+            >
+              {#if isGenerating}
+                <Loader2 size={15} class="animate-spin" />
+                <span>{i18n.locale === 'en' ? 'Generating Grid...' : '正在生成表情网格...'}</span>
+              {:else}
+                <Sparkles size={15} />
+                <span>{i18n.t('char_generate_expr_btn')}</span>
+              {/if}
+            </button>
+          {/if}
         </aside>
       </div>
+
+    <!-- ====================================================================== -->
+    <!-- MODULE 4: 3D Pose & Keyframe Studio                                    -->
+    <!-- ====================================================================== -->
+    {:else if activeModule === 'pose3d'}
+      <Pose3DStudio
+        {externalMcpClip}
+        onApplyToSpriteStudio={(dataUrl, rows, cols, actionName, actionId) => {
+          spritePoseRefDataUrl = dataUrl;
+          spritePoseRefLabel = `3D: ${actionName}`;
+          spritePoseRefIsManual = false;
+          sheetRows = rows;
+          sheetCols = cols;
+          gridPreset = `${rows}x${cols}`;
+          if (actionId) {
+            quickPoseActionId = actionId;
+          }
+          quickPoseCameraId = 'follow_clip';
+          void loadPoseClips();
+          activeModule = 'spritesheet';
+          appStore.toast(
+            'ok',
+            i18n.locale === 'en'
+              ? `Loaded ${rows}×${cols} 3D pose reference into Sprite Studio`
+              : `已将 ${rows}×${cols} 3D 动作参考图送入序列帧工坊`
+          );
+        }}
+      />
     {/if}
 
     <!-- ====================================================================== -->
@@ -2778,55 +4035,244 @@
         </button>
       </div>
 
-      <div class="flex flex-1 items-center gap-2.5 overflow-x-auto pb-1">
+      <div
+        class="filmstrip-scroll flex flex-1 items-center gap-2.5 overflow-x-auto pb-1"
+        onwheel={(e) => {
+          if (e.deltaY !== 0) {
+            e.preventDefault();
+            e.currentTarget.scrollLeft += e.deltaY;
+          }
+        }}
+      >
         {#each galleryAssets as item (item.id)}
-          <div
-            class="group relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-line bg-ink-0 transition-all hover:border-accent"
-          >
-            <img
-              src={assetUrl(item.filePath)}
-              alt={item.prompt}
-              class="h-full w-full object-contain p-1"
-            />
-            {#if activeModule === 'spritesheet'}
-              <div
-                class="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-ink-0/90 p-1 opacity-0 transition-opacity group-hover:opacity-100"
-              >
+          {#if activeModule === 'spritesheet'}
+            <button
+              type="button"
+              onclick={() => loadSpriteSheetAsset(item, true)}
+              oncontextmenu={(e) => openCharContextMenu(e, item)}
+              title="{item.prompt || item.filePath} ({item.width}×{item.height})"
+              class="group relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border transition-all {spriteSheetAssetId === item.id
+                ? 'border-accent ring-2 ring-accent/40'
+                : 'border-line bg-ink-0 hover:border-accent'}"
+            >
+              <img
+                src={assetUrl(item.filePath)}
+                alt={item.prompt}
+                draggable="false"
+                class="h-full w-full object-contain p-1"
+              />
+            </button>
+          {:else}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              oncontextmenu={(e) => openCharContextMenu(e, item)}
+              title="{item.prompt || item.filePath} ({item.width}×{item.height})"
+              class="group relative h-16 w-16 shrink-0 overflow-hidden rounded-xl border border-line bg-ink-0 transition-all hover:border-accent"
+            >
+              <img
+                src={assetUrl(item.filePath)}
+                alt={item.prompt}
+                class="h-full w-full object-contain p-1"
+              />
+              {#if activeModule === 'turnaround_skin'}
                 <button
                   type="button"
-                  onclick={() => setSpriteCharRefFromAsset(item, true)}
-                  class="w-full rounded bg-accent px-1 py-0.5 text-[9px] font-extrabold text-accent-ink hover:brightness-110"
+                  onclick={() => setDesignAnchorFromAsset(item, true)}
+                  class="absolute inset-0 flex items-center justify-center bg-ink-0/80 text-[10px] font-extrabold text-accent opacity-0 transition-opacity group-hover:opacity-100"
                 >
-                  {i18n.t('char_btn_set_ref')}
+                  {i18n.t('char_btn_set_design')}
                 </button>
+              {:else}
                 <button
                   type="button"
-                  onclick={() => loadSpriteSheetAsset(item, true)}
-                  class="w-full rounded border border-line bg-ink-2 px-1 py-0.5 text-[9px] font-bold text-fg hover:border-accent hover:text-accent"
+                  onclick={() => setExprCharRefFromAsset(item, true)}
+                  class="absolute inset-0 flex items-center justify-center bg-ink-0/80 text-[10px] font-extrabold text-accent opacity-0 transition-opacity group-hover:opacity-100"
                 >
-                  {i18n.t('char_btn_load_slice')}
+                  {i18n.t('char_btn_set_expr')}
                 </button>
-              </div>
-            {:else if activeModule === 'turnaround_skin'}
-              <button
-                type="button"
-                onclick={() => setDesignAnchorFromAsset(item, true)}
-                class="absolute inset-0 flex items-center justify-center bg-ink-0/80 text-[10px] font-extrabold text-accent opacity-0 transition-opacity group-hover:opacity-100"
-              >
-                {i18n.t('char_btn_set_design')}
-              </button>
-            {:else}
-              <button
-                type="button"
-                onclick={() => setExprCharRefFromAsset(item, true)}
-                class="absolute inset-0 flex items-center justify-center bg-ink-0/80 text-[10px] font-extrabold text-accent opacity-0 transition-opacity group-hover:opacity-100"
-              >
-                {i18n.t('char_btn_set_expr')}
-              </button>
-            {/if}
-          </div>
+              {/if}
+            </div>
+          {/if}
         {/each}
       </div>
     </div>
   </div>
 </div>
+
+<!-- Full-Screen Image Preview Lightbox Modal -->
+{#if previewLightbox}
+  <div
+    role="dialog"
+    tabindex="-1"
+    onclick={() => (previewLightbox = null)}
+    onkeydown={(e) => e.key === 'Escape' && (previewLightbox = null)}
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8 backdrop-blur-md"
+  >
+    <div
+      role="presentation"
+      onclick={(e) => e.stopPropagation()}
+      class="relative flex max-h-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-line-strong bg-ink-1 shadow-2xl"
+    >
+      <div class="checkerboard flex max-h-[78vh] min-h-[240px] min-w-[320px] items-center justify-center overflow-auto p-5">
+        <img
+          src={previewLightbox.dataUrl}
+          alt={previewLightbox.title}
+          draggable="false"
+          onload={(e) => {
+            const img = e.currentTarget as HTMLImageElement;
+            if (previewLightbox && (!previewLightbox.width || !previewLightbox.height)) {
+              previewLightbox = {
+                ...previewLightbox,
+                width: img.naturalWidth || img.width,
+                height: img.naturalHeight || img.height
+              };
+            }
+          }}
+          class="max-h-[72vh] max-w-[82vw] object-contain"
+        />
+      </div>
+      <div class="flex items-center justify-between gap-4 border-t border-line bg-ink-0 px-5 py-3">
+        <div class="flex min-w-0 flex-1 items-center gap-2.5">
+          <span class="truncate text-xs font-bold text-fg">{previewLightbox.title}</span>
+          {#if previewLightbox.width && previewLightbox.height}
+            <span class="shrink-0 rounded bg-accent/15 px-2 py-0.5 font-mono text-[11px] font-bold text-accent">
+              {previewLightbox.width}×{previewLightbox.height}
+            </span>
+          {/if}
+        </div>
+        <div class="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onclick={handleExportLightboxPng}
+            class="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-extrabold text-accent-ink hover:brightness-110"
+          >
+            <Download size={14} />
+            <span>{i18n.t('char_export_png')}</span>
+          </button>
+          <button
+            type="button"
+            onclick={() => (previewLightbox = null)}
+            class="flex items-center gap-1 rounded-lg border border-line bg-ink-2 px-2.5 py-1.5 text-xs font-semibold text-fg-muted hover:text-fg"
+          >
+            <X size={14} />
+            <span>{i18n.locale === 'en' ? 'Close' : '关闭'}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Right-Click Secondary Context Menu for Bottom Filmstrip -->
+{#if charContextMenu}
+  {@const target = charContextMenu.asset}
+  <div
+    role="menu"
+    tabindex="-1"
+    onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => e.key === 'Escape' && (charContextMenu = null)}
+    style="left: {charContextMenu.x}px; top: {charContextMenu.y}px;"
+    class="fixed z-50 flex w-56 flex-col gap-0.5 rounded-xl border border-line-strong bg-ink-1/95 p-1.5 text-xs shadow-2xl backdrop-blur-xl"
+  >
+    {#if activeModule === 'spritesheet'}
+      <button
+        type="button"
+        onclick={() => {
+          charContextMenu = null;
+          void loadSpriteSheetAsset(target, true);
+        }}
+        class="flex items-center gap-2 rounded-lg bg-accent/15 px-2.5 py-1.5 text-left font-bold text-accent hover:bg-accent hover:text-accent-ink"
+      >
+        <Film size={13} />
+        <span>{i18n.locale === 'en' ? 'Load into Sprite Slicer' : '载入序列帧切帧'}</span>
+      </button>
+    {:else if activeModule === 'turnaround_skin'}
+      <button
+        type="button"
+        onclick={() => {
+          charContextMenu = null;
+          void setDesignAnchorFromAsset(target, true);
+        }}
+        class="flex items-center gap-2 rounded-lg bg-accent/15 px-2.5 py-1.5 text-left font-bold text-accent hover:bg-accent hover:text-accent-ink"
+      >
+        <Users size={13} />
+        <span>{i18n.locale === 'en' ? 'Set as Turnaround Anchor' : '设为三视图设定基准'}</span>
+      </button>
+    {:else}
+      <button
+        type="button"
+        onclick={() => {
+          charContextMenu = null;
+          if (activeModule !== 'expression') activeModule = 'expression';
+          void setExprCharRefFromAsset(target, true);
+        }}
+        class="flex items-center gap-2 rounded-lg bg-accent/15 px-2.5 py-1.5 text-left font-bold text-accent hover:bg-accent hover:text-accent-ink"
+      >
+        <Smile size={13} />
+        <span>{i18n.locale === 'en' ? 'Set as Expression Ref' : '设为表情参考立绘'}</span>
+      </button>
+    {/if}
+
+    <button
+      type="button"
+      onclick={() => {
+        charContextMenu = null;
+        void setSpriteCharRefFromAsset(target, true);
+      }}
+      class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-semibold text-fg hover:bg-ink-2 hover:text-accent"
+    >
+      <Shirt size={13} />
+      <span>{i18n.locale === 'en' ? 'Set as Sprite Char Ref' : '设为序列帧外观参考'}</span>
+    </button>
+
+    <button
+      type="button"
+      onclick={() => {
+        charContextMenu = null;
+        appStore.openInStudio(target);
+      }}
+      class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-fg hover:bg-ink-2 hover:text-accent"
+    >
+      <Sliders size={13} />
+      <span>{i18n.t('asset_send_to_studio')}</span>
+    </button>
+
+    <button
+      type="button"
+      onclick={() => {
+        charContextMenu = null;
+        void openAssetInLightbox(target);
+      }}
+      class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-fg hover:bg-ink-2 hover:text-accent"
+    >
+      <Eye size={13} />
+      <span>{i18n.locale === 'en' ? 'Zoom / Preview Large' : '放大查看'}</span>
+    </button>
+
+    <button
+      type="button"
+      onclick={() => {
+        charContextMenu = null;
+        void api.revealInExplorer(target.filePath);
+      }}
+      class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-fg hover:bg-ink-2"
+    >
+      <FolderOpen size={13} />
+      <span>{i18n.locale === 'en' ? 'Open Containing Folder' : '打开所在目录'}</span>
+    </button>
+
+    <div class="my-0.5 h-px bg-line"></div>
+
+    <button
+      type="button"
+      onclick={() => {
+        charContextMenu = null;
+        void handleDeleteGalleryAsset(target);
+      }}
+      class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-err hover:bg-err hover:text-white"
+    >
+      <Trash2 size={13} />
+      <span>{i18n.locale === 'en' ? 'Delete Image' : '删除图片'}</span>
+    </button>
+  </div>
+{/if}

@@ -1,4 +1,4 @@
-export type CharacterModuleId = 'turnaround_skin' | 'spritesheet' | 'expression';
+export type CharacterModuleId = 'turnaround_skin' | 'spritesheet' | 'expression' | 'pose3d';
 
 export interface CharacterModuleMeta {
   id: CharacterModuleId;
@@ -41,10 +41,81 @@ export const CHARACTER_MODULES: CharacterModuleMeta[] = [
     code: 'MOD-03',
     title: '角色表情差分集',
     titleEn: 'Expression Sheet',
-    subtitle: '喜怒哀乐多表情网格生成 · 自动切分对话立绘差分',
-    subtitleEn: 'Multi-expression portrait grid · Auto-sliced dialogue portraits',
+    subtitle: '同模单张完整立绘表情差分 · 兼顾 2×2/2×3 速览网格切分',
+    subtitleEn: 'Identity-locked expression portraits · Optional 2×2/2×3 grid slicer',
     badge: '立绘差分',
     badgeEn: 'Expressions'
+  },
+  {
+    id: 'pose3d',
+    code: 'MOD-04',
+    title: '3D 动作与 K 帧工坊',
+    titleEn: '3D Pose & Keyframe Studio',
+    subtitle: '无光照立体火柴人 · 多视角与头身比 · 关键帧动作编辑',
+    subtitleEn: 'Unlit 3D stickman rig · Multi-angle & proportion · Keyframe pose editor',
+    badge: '3D 动作参考',
+    badgeEn: '3D Pose Ref'
+  }
+];
+
+export interface ExpressionPreset {
+  id: string;
+  label: string;
+  labelEn: string;
+  promptDesc: string;
+}
+
+/**
+ * 角色表情差分常用预设（支持单张完整立绘多选批量生成）
+ */
+export const EXPRESSION_PRESETS: ExpressionPreset[] = [
+  {
+    id: 'smile',
+    label: '微笑',
+    labelEn: 'Smile',
+    promptDesc: 'warm joyful smile, happy curved eyes, relaxed cheerful expression'
+  },
+  {
+    id: 'angry',
+    label: '愤怒',
+    labelEn: 'Angry',
+    promptDesc: 'intense angry glare, furrowed brows, fierce scowl'
+  },
+  {
+    id: 'sad',
+    label: '悲伤',
+    labelEn: 'Sad',
+    promptDesc: 'sorrowful sad expression, lowered worried eyebrows, glistening teary eyes, downturned mouth'
+  },
+  {
+    id: 'surprised',
+    label: '惊讶',
+    labelEn: 'Surprised',
+    promptDesc: 'shocked surprised expression, wide open eyes, raised eyebrows, small open mouth'
+  },
+  {
+    id: 'shy',
+    label: '害羞',
+    labelEn: 'Shy',
+    promptDesc: 'shy flustered blushing expression, rosy cheeks, slightly averted eyes, timid smile'
+  },
+  {
+    id: 'smug',
+    label: '得意',
+    labelEn: 'Smug',
+    promptDesc: 'confident smug smirk, half-lidded playful eyes, raised eyebrow'
+  },
+  {
+    id: 'serious',
+    label: '严肃',
+    labelEn: 'Serious',
+    promptDesc: 'calm serious stoic expression, sharp focused gaze, firm closed mouth'
+  },
+  {
+    id: 'closed_eyes',
+    label: '闭眼',
+    labelEn: 'Closed Eyes',
+    promptDesc: 'peaceful closed eyes expression, serene gentle smile, relaxed eyelids'
   }
 ];
 
@@ -58,6 +129,7 @@ export interface SpriteActionPreset {
 }
 
 /**
+ * @deprecated 已由 MOD-02 内置统一 3D 动作参考选择器替代，保留导出以兼容旧引用。
  * 序列帧动作预设模板
  * 第 1 项为「默认自由模板 (Default)」，不注入任何特定动作套路，完全由用户输入的提示词决定动作，避免内置动作词污染。
  */
@@ -112,11 +184,11 @@ export const SPRITE_ACTION_PRESETS: SpriteActionPreset[] = [
   },
   {
     id: 'jump',
-    label: '跳跃起落 (Jump Arc)',
-    labelEn: 'Jump & Landing Arc',
-    placeholder: '补充角色或跳跃动作细节（如已选定角色参考图可留空，直接按起跳滞空落地预设生成）...',
-    placeholderEn: 'Optional character or jump details (leave empty to use reference character with Jump Arc preset)...',
-    rule: '2D game sprite sheet of a jump animation sequence: crouch preparation, upward launch, mid-air apex pose, downward fall, and landing buffer'
+    label: '跳跃起落 (Jump · 引擎原地帧)',
+    labelEn: 'Jump Velocity States (In-Place)',
+    placeholder: '补充角色或跳跃动作细节（默认按引擎 VerticalVelocity 6阶段原地姿态生成，兼容 Unity/Godot 碰撞体）...',
+    placeholderEn: 'Optional character or jump details (generates In-Place VerticalVelocity states for Unity/Godot colliders)...',
+    rule: '2D side-view game sprite sheet of an in-place jump velocity-state sequence (keep torso/collider center anchored in cell, do NOT float character to top margin): (1) Take-Off Squat (Vy=0), (2) Upward Launch Stretch (Vy>0), (3) Ascending Knee Tuck (Vy>0), (4) Weightless Apex Float (Vy≈0), (5) Descending Fall Leg Extension (Vy<0), (6) Landing Impact Cushion'
   },
   {
     id: 'hit_ko',

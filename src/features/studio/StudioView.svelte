@@ -30,7 +30,9 @@
     MessageSquarePlus,
     Trash2,
     X,
-    Plus
+    Plus,
+    Maximize2,
+    Layers
   } from '@lucide/svelte';
   import { api, assetUrl } from '$lib/api';
   import type { AssetItem, MattingModelInfo } from '$lib/api/types';
@@ -38,6 +40,7 @@
   import { jobsStore } from '$lib/stores/jobs.svelte';
   import { loadPersistedState, savePersistedState } from '$lib/stores/workspace';
   import { i18n } from '$lib/i18n/index.svelte';
+  import { ARCHETYPE_PRESETS } from '$features/generate/presets';
   import ProviderModelPicker from '$lib/components/ui/ProviderModelPicker.svelte';
   import {
     cleanPixelArtCanvas,
@@ -168,6 +171,8 @@
   // Filmstrip Gallery state
   let studioProjectFilter = $state<string>('_all');
   let galleryAssets = $state<AssetItem[]>([]);
+  let contextMenu = $state<{ x: number; y: number; asset: AssetItem } | null>(null);
+  let lightboxAsset = $state<AssetItem | null>(null);
   let isDragOver = $state(false);
   let dragDepth = 0;
 
@@ -375,6 +380,70 @@
       await loadFromDataUrl(dataUrl);
     } catch (e: any) {
       appStore.toast('err', e?.message ?? 'Failed to load image file');
+    }
+  }
+
+  function clearStudioCanvas() {
+    currentAsset = null;
+    origCanvas = null;
+    origData = null;
+    procCanvas = null;
+    procData = null;
+    pixelBaseCanvas = null;
+    origSourceDataUrl = '';
+    imgWidth = 0;
+    imgHeight = 0;
+    zoom = 1;
+    panX = 0;
+    panY = 0;
+    cropSel = null;
+    annotations = [];
+    activeAnnotationId = null;
+    draftAnnotRect = null;
+    hasRegionEditResult = false;
+    lastRegionEditFullCanvas = null;
+    lastRegionEditPreCanvas = null;
+    lastPixelGridDims = null;
+    lastPixelMeta = '';
+    undoStack.length = 0;
+    redoStack.length = 0;
+    undoCount = 0;
+    redoCount = 0;
+  }
+
+  async function changeAssetArchetype(asset: AssetItem, newArchId: string) {
+    try {
+      await api.updateAssetArchetype(asset.id, newArchId);
+      galleryAssets = galleryAssets.map((a) =>
+        a.id === asset.id ? { ...a, archetype: newArchId } : a
+      );
+      if (currentAsset?.id === asset.id) {
+        currentAsset = { ...currentAsset, archetype: newArchId };
+      }
+      if (lightboxAsset?.id === asset.id) {
+        lightboxAsset = { ...lightboxAsset, archetype: newArchId };
+      }
+      appStore.notifyAssetsChanged();
+      appStore.toast('ok', i18n.t('toast_archetype_updated'));
+    } catch (e: any) {
+      appStore.toast('err', e?.message ?? 'Failed to update category');
+    }
+  }
+
+  async function removeFilmstripAsset(asset: AssetItem) {
+    try {
+      await api.deleteAsset(asset.id);
+      galleryAssets = galleryAssets.filter((a) => a.id !== asset.id);
+      if (currentAsset?.id === asset.id) {
+        clearStudioCanvas();
+      }
+      if (lightboxAsset?.id === asset.id) {
+        lightboxAsset = null;
+      }
+      appStore.notifyAssetsChanged();
+      await appStore.refreshProjects();
+    } catch (e: any) {
+      appStore.toast('err', e?.message ?? 'Failed to delete asset');
     }
   }
 
@@ -1445,6 +1514,16 @@
 
   function onWindowKeyDown(e: KeyboardEvent) {
     if (appStore.activeView !== 'studio') return;
+    if (e.key === 'Escape') {
+      if (contextMenu) {
+        contextMenu = null;
+        return;
+      }
+      if (lightboxAsset) {
+        lightboxAsset = null;
+        return;
+      }
+    }
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
@@ -1472,7 +1551,13 @@
   }
 </script>
 
-<svelte:window onkeydown={onWindowKeyDown} onkeyup={onWindowKeyUp} />
+<svelte:window
+  onkeydown={onWindowKeyDown}
+  onkeyup={onWindowKeyUp}
+  onclick={() => {
+    if (contextMenu) contextMenu = null;
+  }}
+/>
 
 <div class="flex h-full w-full overflow-hidden bg-ink-0 select-none">
   <!-- LEFT & CENTER: Workbench Toolbar + Interactive Viewport + Bottom Filmstrip -->
@@ -2099,11 +2184,28 @@
         </button>
       </div>
 
-      <div class="flex flex-1 items-center gap-2 overflow-x-auto px-3 py-1.5">
+      <div
+        class="filmstrip-scroll flex flex-1 items-center gap-2 overflow-x-auto px-3 py-1.5"
+        onwheel={(e) => {
+          if (e.deltaY !== 0) {
+            e.preventDefault();
+            e.currentTarget.scrollLeft += e.deltaY;
+          }
+        }}
+      >
         {#each galleryAssets as item (item.id)}
           <button
             type="button"
             onclick={() => loadAssetIntoStudio(item)}
+            oncontextmenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              contextMenu = {
+                x: Math.max(12, Math.min(e.clientX, window.innerWidth - 268)),
+                y: Math.max(12, Math.min(e.clientY, window.innerHeight - 360)),
+                asset: item
+              };
+            }}
             title="{item.prompt || item.filePath} ({item.width}×{item.height})"
             class="group relative h-16 w-16 shrink-0 overflow-hidden rounded-lg border transition-all {currentAsset?.id ===
             item.id
@@ -2796,3 +2898,190 @@
     </section>
   </aside>
 </div>
+
+<!-- Lightbox Modal -->
+{#if lightboxAsset}
+  <div
+    role="dialog"
+    tabindex="-1"
+    onclick={() => (lightboxAsset = null)}
+    onkeydown={(e) => e.key === 'Escape' && (lightboxAsset = null)}
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8 backdrop-blur-md"
+  >
+    <div
+      role="presentation"
+      onclick={(e) => e.stopPropagation()}
+      class="relative flex max-h-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-line-strong bg-ink-1 shadow-2xl"
+    >
+      <div class="checkerboard flex max-h-[75vh] items-center justify-center overflow-hidden p-4">
+        <img
+          src={assetUrl(lightboxAsset.filePath)}
+          alt={lightboxAsset.prompt}
+          draggable="false"
+          class="max-h-[70vh] w-auto object-contain"
+        />
+      </div>
+      <div class="flex items-center justify-between gap-4 border-t border-line bg-ink-0 px-5 py-3">
+        <div class="min-w-0 flex-1">
+          <div class="truncate text-xs font-medium text-fg">
+            {lightboxAsset.prompt || lightboxAsset.filePath}
+          </div>
+          <div class="mt-0.5 font-mono text-[11px] text-fg-muted">
+            {lightboxAsset.model} · {lightboxAsset.width}×{lightboxAsset.height}
+          </div>
+        </div>
+        <div class="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onclick={() => {
+              const target = lightboxAsset!;
+              lightboxAsset = null;
+              loadAssetIntoStudio(target);
+            }}
+            class="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-extrabold text-accent-ink hover:brightness-110"
+          >
+            <Sliders size={14} strokeWidth={2.2} />
+            <span>{i18n.t('studio_load_to_canvas')}</span>
+          </button>
+          <button
+            type="button"
+            onclick={() => {
+              const target = lightboxAsset!;
+              lightboxAsset = null;
+              appStore.openInCharacterForge(
+                target,
+                target.archetype === 'sprite_sheet' ? 'spritesheet' : 'outfit'
+              );
+            }}
+            class="flex items-center gap-1.5 rounded-lg border border-line bg-ink-2 px-3 py-1.5 text-xs font-medium text-fg hover:border-accent"
+          >
+            <Sparkles size={14} />
+            <span>{i18n.t('asset_send_to_character')}</span>
+          </button>
+          <button
+            type="button"
+            onclick={() => api.revealInExplorer(lightboxAsset!.filePath)}
+            class="flex items-center gap-1.5 rounded-lg border border-line bg-ink-2 px-3 py-1.5 text-xs font-medium text-fg hover:border-accent"
+          >
+            <FolderOpen size={14} />
+            <span>{i18n.t('asset_open_folder')}</span>
+          </button>
+          <button
+            type="button"
+            onclick={() => (lightboxAsset = null)}
+            class="rounded-lg bg-ink-2 p-1.5 text-fg-muted hover:text-fg"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Custom Right-Click Context Menu for Bottom Filmstrip -->
+{#if contextMenu}
+  <div
+    role="menu"
+    tabindex="-1"
+    onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => e.key === 'Escape' && (contextMenu = null)}
+    style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
+    class="fixed z-50 flex max-h-[calc(100vh-24px)] w-64 flex-col gap-0.5 overflow-y-auto rounded-xl border border-line-strong bg-ink-1/95 p-2 text-xs shadow-2xl backdrop-blur-xl"
+  >
+    <div class="mb-1 rounded-lg border border-line bg-ink-0/70 p-2">
+      <div class="mb-1.5 font-mono text-[10px] font-bold tracking-wider text-fg-muted uppercase">
+        {i18n.t('ctx_change_archetype')}
+      </div>
+      <div class="grid grid-cols-2 gap-1">
+        {#each ARCHETYPE_PRESETS as arch (arch.id)}
+          {@const isCurArch = (contextMenu.asset.archetype || 'item_icon') === arch.id}
+          <button
+            type="button"
+            onclick={() => {
+              changeAssetArchetype(contextMenu!.asset, arch.id);
+              contextMenu = null;
+            }}
+            class="flex items-center justify-between rounded px-2 py-1 text-left text-[11px] font-medium transition-colors {isCurArch
+              ? 'bg-accent text-accent-ink font-bold'
+              : 'bg-ink-2/70 text-fg-muted hover:bg-ink-2 hover:text-fg'}"
+          >
+            <span class="truncate">{i18n.t(arch.labelKey)}</span>
+            {#if isCurArch}
+              <Check size={11} strokeWidth={2.5} />
+            {/if}
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    <button
+      type="button"
+      onclick={() => {
+        lightboxAsset = contextMenu!.asset;
+        contextMenu = null;
+      }}
+      class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-fg hover:bg-ink-2 hover:text-accent"
+    >
+      <Maximize2 size={13} />
+      <span>{i18n.t('ctx_view_large')}</span>
+    </button>
+
+    <button
+      type="button"
+      onclick={() => {
+        const target = contextMenu!.asset;
+        contextMenu = null;
+        appStore.openInCharacterForge(
+          target,
+          target.archetype === 'sprite_sheet' ? 'spritesheet' : 'outfit'
+        );
+      }}
+      class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-semibold text-fg hover:bg-ink-2 hover:text-accent"
+    >
+      <Sparkles size={13} />
+      <span>{i18n.t('asset_send_to_character')}</span>
+    </button>
+
+    {#if contextMenu.asset.archetype !== 'sprite_sheet'}
+      <button
+        type="button"
+        onclick={() => {
+          const target = contextMenu!.asset;
+          contextMenu = null;
+          appStore.openInCharacterForge(target, 'spritesheet');
+        }}
+        class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-fg hover:bg-ink-2 hover:text-accent"
+      >
+        <Layers size={13} />
+        <span>{i18n.t('asset_send_to_spritesheet')}</span>
+      </button>
+    {/if}
+
+    <button
+      type="button"
+      onclick={() => {
+        api.revealInExplorer(contextMenu!.asset.filePath);
+        contextMenu = null;
+      }}
+      class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-fg hover:bg-ink-2"
+    >
+      <FolderOpen size={13} />
+      <span>{i18n.t('asset_open_folder')}</span>
+    </button>
+
+    <div class="my-0.5 h-px bg-line"></div>
+
+    <button
+      type="button"
+      onclick={() => {
+        removeFilmstripAsset(contextMenu!.asset);
+        contextMenu = null;
+      }}
+      class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-err hover:bg-err hover:text-white"
+    >
+      <Trash2 size={13} />
+      <span>{i18n.t('asset_delete')}</span>
+    </button>
+  </div>
+{/if}

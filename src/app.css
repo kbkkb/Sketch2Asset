@@ -89,8 +89,8 @@ svg {
 
 /* Custom sleek scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -101,6 +101,22 @@ svg {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-fg-subtle);
+}
+
+/* Prominent horizontal scrollbar for sprite filmstrip */
+.filmstrip-scroll::-webkit-scrollbar {
+  height: 9px;
+}
+.filmstrip-scroll::-webkit-scrollbar-track {
+  background: color-mix(in oklab, var(--color-line-strong) 45%, transparent);
+  border-radius: 9999px;
+}
+.filmstrip-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--color-accent) 55%, var(--color-fg-subtle));
+  border-radius: 9999px;
+}
+.filmstrip-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--color-accent);
 }
 
 /* Subtle stage grid & darkroom radial glow */

@@ -519,6 +519,84 @@ fn build_multipart_edit_form(
     Ok(form)
 }
 
+fn build_multipart_multi_image_edit_form(
+    model: &str,
+    prompt: &str,
+    size: &str,
+    images: &[(&[u8], &str, &str)],
+) -> AppResult<multipart::Form> {
+    let mut form = multipart::Form::new()
+        .text("model", model.to_string())
+        .text("prompt", prompt.to_string());
+    for (bytes, mime, filename) in images {
+        let part = multipart::Part::bytes(bytes.to_vec())
+            .file_name((*filename).to_string())
+            .mime_str(mime)
+            .map_err(|e| AppError::new(AppErrorCode::InvalidInput, e.to_string()))?;
+        form = form.part("image[]", part);
+    }
+    if !size.is_empty() && size != "auto" {
+        form = form.text("size", size.to_string());
+    }
+    Ok(form)
+}
+
+fn composite_ref_inset_into_guide(ref_bytes: &[u8], guide_bytes: &[u8]) -> Option<Vec<u8>> {
+    use image::GenericImageView;
+    let ref_img = image::load_from_memory(ref_bytes).ok()?;
+    let guide_img = image::load_from_memory(guide_bytes).ok()?;
+    let mut canvas = guide_img.to_rgba8();
+    let (gw, gh) = canvas.dimensions();
+    if gw < 64 || gh < 64 {
+        return None;
+    }
+    let max_inset_w = ((gw as f32) * 0.18).round().clamp(32.0, 220.0) as u32;
+    let max_inset_h = ((gh as f32) * 0.18).round().clamp(32.0, 220.0) as u32;
+    let (rw, rh) = ref_img.dimensions();
+    if rw == 0 || rh == 0 {
+        return None;
+    }
+    let scale = (max_inset_w as f32 / rw as f32).min(max_inset_h as f32 / rh as f32);
+    let tw = ((rw as f32 * scale).round() as u32).max(16).min(gw.saturating_sub(8));
+    let th = ((rh as f32 * scale).round() as u32).max(16).min(gh.saturating_sub(8));
+    let thumb = ref_img
+        .resize_exact(tw, th, image::imageops::FilterType::Triangle)
+        .to_rgba8();
+
+    let pad = 4_u32;
+    let box_w = (tw + pad * 2).min(gw);
+    let box_h = (th + pad * 2).min(gh);
+    for y in 0..box_h {
+        for x in 0..box_w {
+            let is_border = x < 2 || y < 2 || x + 2 >= box_w || y + 2 >= box_h;
+            let px = if is_border {
+                image::Rgba([0, 229, 255, 255])
+            } else {
+                image::Rgba([255, 255, 255, 255])
+            };
+            canvas.put_pixel(x, y, px);
+        }
+    }
+    for y in 0..th {
+        for x in 0..tw {
+            let p = *thumb.get_pixel(x, y);
+            let a = p[3] as f32 / 255.0;
+            let dst = *canvas.get_pixel(x + pad, y + pad);
+            let r = (p[0] as f32 * a + dst[0] as f32 * (1.0 - a)).round() as u8;
+            let g = (p[1] as f32 * a + dst[1] as f32 * (1.0 - a)).round() as u8;
+            let b = (p[2] as f32 * a + dst[2] as f32 * (1.0 - a)).round() as u8;
+            canvas.put_pixel(x + pad, y + pad, image::Rgba([r, g, b, 255]));
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut out);
+    image::DynamicImage::ImageRgba8(canvas)
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .ok()?;
+    Some(out)
+}
+
 async fn execute_images_request_with_size_fallback<F>(
     client: &reqwest::Client,
     endpoint: &str,
@@ -890,6 +968,8 @@ pub async fn edit_regions_via_images(
     let base = normalize_base_url(api_base)?;
     let url = format!("{}/images/edits", base);
 
+    let has_mask = mask_bytes.is_some();
+
     // 1. Try standard /images/edits with image + mask if mask_bytes is provided
     if let Some((m_bytes, m_mime)) = mask_bytes {
         match send_with_retry("images/edits", &url, false, || {
@@ -932,8 +1012,68 @@ pub async fn edit_regions_via_images(
         }
     }
 
-    // 2. Try /images/edits with visual guide image (or original image)
-    let target_img = guide_bytes.clone().unwrap_or_else(|| original_bytes.clone());
+    // 2a. When mask_bytes is None and both original_bytes (character ref) and guide_bytes (pose/grid guide) exist,
+    // first try multi-image /images/edits sending BOTH as "image[]" parts.
+    if !has_mask {
+        if let Some((ref g_bytes, ref g_mime)) = guide_bytes {
+            match send_with_retry("images/edits", &url, false, || {
+                let form = build_multipart_multi_image_edit_form(
+                    model,
+                    prompt,
+                    size,
+                    &[
+                        (&original_bytes.0, &original_bytes.1, "character_ref.png"),
+                        (g_bytes, g_mime, "pose_guide.png"),
+                    ],
+                )?;
+                Ok(client
+                    .post(&url)
+                    .header(reqwest::header::ACCEPT, "application/json")
+                    .bearer_auth(api_key.trim())
+                    .multipart(form))
+            })
+            .await
+            {
+                Ok(resp) => {
+                    let text = resp.text_lossy();
+                    if resp.status.is_success() {
+                        let bytes = extract_image_bytes_from_images_resp(client, &text).await?;
+                        return Ok((bytes, "images/edits (multi-image)".to_string()));
+                    }
+                    if matches!(resp.status.as_u16(), 401 | 403) {
+                        return Err(map_upstream_error_with_endpoint(
+                            "images/edits",
+                            resp.attempts,
+                            DEFAULT_MAX_ATTEMPTS,
+                            resp.status,
+                            &text,
+                        ));
+                    }
+                }
+                Err(err) => {
+                    eprintln!(
+                        "[providers] multi-image edit fallback to composite guide after error: {}",
+                        err.message
+                    );
+                }
+            }
+        }
+    }
+
+    // 2b. Try /images/edits with composite reference+guide image (or original image)
+    let target_img = if !has_mask {
+        if let Some((ref g_bytes, ref g_mime)) = guide_bytes {
+            if let Some(comp_png) = composite_ref_inset_into_guide(&original_bytes.0, g_bytes) {
+                (comp_png, "image/png".to_string())
+            } else {
+                (g_bytes.clone(), g_mime.clone())
+            }
+        } else {
+            original_bytes.clone()
+        }
+    } else {
+        guide_bytes.clone().unwrap_or_else(|| original_bytes.clone())
+    };
     match send_with_retry("images/edits", &url, false, || {
         let form = build_multipart_edit_form(
             model,

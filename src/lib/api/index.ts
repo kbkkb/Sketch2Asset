@@ -13,6 +13,8 @@ import type {
   MattingModelInfo,
   MattingRequestPayload,
   MattingResponsePayload,
+  McpPoseBridgeRequest,
+  PoseActionClip,
   ProjectInfo,
   RegionEditPayload,
   RegionEditResponse
@@ -79,6 +81,7 @@ export const api = {
     call<ProjectInfo[]>('rename_project', { oldName, newName }),
   listAssets: (project?: string, limit = 100) =>
     call<AssetItem[]>('list_assets', { project: project ?? null, limit }),
+  getLibraryRevision: () => call<string>('get_library_revision'),
   deleteAsset: (id: string) => call<void>('delete_asset', { id }),
   updateAssetArchetype: (id: string, archetype: string) =>
     call<void>('update_asset_archetype', { id, archetype }),
@@ -116,11 +119,29 @@ export const api = {
   generateCharacterAsset: (payload: CharacterGeneratePayload) =>
     call<CharacterGenerateResponse>('generate_character_asset', { payload }),
   checkAppUpdate: () => call<AppUpdateInfo>('check_app_update'),
+  performWindowClose: (action: 'tray' | 'exit') =>
+    call<void>('perform_window_close', { action }),
   getAgentHubStatus: () => call<AgentHubStatus>('get_agent_hub_status'),
   installAgentIntegration: (agentId: string) =>
     call<AgentHubStatus>('install_agent_integration', { agentId }),
   uninstallAgentIntegration: (agentId: string) =>
     call<AgentHubStatus>('uninstall_agent_integration', { agentId }),
   exportAgentSkillBundle: (reveal = true) =>
-    call<string>('export_agent_skill_bundle', { reveal })
+    call<string>('export_agent_skill_bundle', { reveal }),
+  listPoseActions: () => call<PoseActionClip[]>('list_pose_actions'),
+  savePoseAction: (clip: PoseActionClip) =>
+    call<PoseActionClip>('save_pose_action', { clip }),
+  deletePoseAction: (id: string) =>
+    call<boolean>('delete_pose_action', { id }),
+  renderPoseActionGrid: (params: {
+    actionId: string;
+    rows: number;
+    cols: number;
+    width?: number;
+    height?: number;
+  }) => call<string>('render_pose_action_grid', params),
+  pollMcpPoseRequest: () =>
+    call<McpPoseBridgeRequest | null>('poll_mcp_pose_request'),
+  completeMcpPoseRequest: (reqId: string, dataUrl: string) =>
+    call<boolean>('complete_mcp_pose_request', { reqId, dataUrl })
 };

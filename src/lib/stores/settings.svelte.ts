@@ -1,5 +1,12 @@
+import { getVersion } from '@tauri-apps/api/app';
 import { api } from '$lib/api';
-import type { AppSettings, AssetItem, ProjectInfo, ProviderProfile } from '$lib/api/types';
+import type {
+  AppSettings,
+  AppUpdateInfo,
+  AssetItem,
+  ProjectInfo,
+  ProviderProfile
+} from '$lib/api/types';
 import { i18n } from '$lib/i18n/index.svelte';
 
 export interface ToastMessage {
@@ -15,9 +22,13 @@ class AppStore {
   settingsTab = $state<'providers' | 'matting' | 'agents' | 'system'>('providers');
   studioPendingAsset = $state<AssetItem | null>(null);
   characterPendingAsset = $state<AssetItem | null>(null);
-  characterSubMode = $state<'turnaround' | 'outfit' | 'spritesheet'>('turnaround');
+  characterSubMode = $state<'turnaround' | 'outfit' | 'spritesheet' | 'expression'>('turnaround');
   toasts = $state<ToastMessage[]>([]);
   assetsRevision = $state(0);
+  appVersion = $state<string>('');
+  updateInfo = $state<AppUpdateInfo | null>(null);
+  isCheckingUpdate = $state(false);
+  closePromptOpen = $state(false);
 
   notifyAssetsChanged() {
     this.assetsRevision++;
@@ -30,7 +41,7 @@ class AppStore {
 
   openInCharacterForge(
     asset: AssetItem,
-    mode: 'turnaround' | 'outfit' | 'spritesheet' = 'outfit'
+    mode: 'turnaround' | 'outfit' | 'spritesheet' | 'expression' = 'outfit'
   ) {
     this.characterPendingAsset = asset;
     this.characterSubMode = mode;
@@ -57,11 +68,50 @@ class AppStore {
 
   async init() {
     try {
-      const s = await api.getSettings();
+      const [s, ver] = await Promise.all([
+        api.getSettings(),
+        getVersion().catch(() => '0.2.1')
+      ]);
+      this.appVersion = ver || '0.2.1';
       this.applySettings(s);
       this.projects = await api.listProjects();
+      void this.refreshUpdateCheck(true);
     } catch (e: any) {
       this.toast('err', e?.message ?? 'Failed to initialize settings');
+    }
+  }
+
+  async refreshUpdateCheck(silent = false): Promise<AppUpdateInfo | null> {
+    if (this.isCheckingUpdate) return this.updateInfo;
+    this.isCheckingUpdate = true;
+    try {
+      const res = await api.checkAppUpdate();
+      this.updateInfo = res;
+      if (!this.appVersion && res.currentVersion) {
+        this.appVersion = res.currentVersion;
+      }
+      if (res.hasUpdate) {
+        this.toast(
+          'info',
+          i18n.locale === 'en'
+            ? `New version ${res.latestVersion} available — click top bar or Settings to update`
+            : `发现新版本 ${res.latestVersion}，可在设置或顶栏点击更新`
+        );
+      } else if (!silent) {
+        const ver = res.currentVersion || this.appVersion;
+        this.toast(
+          'ok',
+          ver ? `${i18n.t('about_is_latest')} (v${ver})` : i18n.t('about_is_latest')
+        );
+      }
+      return res;
+    } catch (e: any) {
+      if (!silent) {
+        this.toast('err', String(e?.message || e));
+      }
+      return null;
+    } finally {
+      this.isCheckingUpdate = false;
     }
   }
 
@@ -117,6 +167,31 @@ class AppStore {
 
   async refreshProjects() {
     this.projects = await api.listProjects();
+  }
+
+  async requestClose() {
+    const mode = this.settings?.closeBehavior || 'ask';
+    if (mode === 'tray') {
+      await api.performWindowClose('tray');
+      return;
+    }
+    if (mode === 'exit') {
+      await api.performWindowClose('exit');
+      return;
+    }
+    this.closePromptOpen = true;
+  }
+
+  async confirmWindowClose(action: 'tray' | 'exit', remember: boolean) {
+    this.closePromptOpen = false;
+    if (remember && this.settings) {
+      try {
+        await this.saveSettings({ closeBehavior: action });
+      } catch {
+        // Proceed with close even if settings save throws
+      }
+    }
+    await api.performWindowClose(action);
   }
 
   toast(kind: 'ok' | 'err' | 'info', text: string) {

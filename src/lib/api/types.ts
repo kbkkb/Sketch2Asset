@@ -86,6 +86,7 @@ export interface AppSettings {
   defaultStyle: string;
   defaultBackground: string;
   defaultSize: string;
+  closeBehavior?: 'ask' | 'tray' | 'exit';
 }
 
 export interface ProjectInfo {
@@ -235,4 +236,51 @@ export interface AgentHubStatus {
   cliExampleSnippet: string;
   skillMarkdown: string;
   agents: AgentTargetInfo[];
+}
+
+export interface PoseCameraConfig {
+  preset: string;
+  yaw: number;
+  pitch: number;
+  ortho: boolean;
+  zoom: number;
+}
+
+export interface PoseProportionConfig {
+  preset: string;
+  headScale: number;
+  torsoScale: number;
+  limbScale: number;
+  weaponType: string;
+  weaponScale: number;
+}
+
+export interface PoseKeyframe {
+  t: number;
+  rootPos: [number, number, number];
+  bones: Record<string, [number, number, number]>;
+}
+
+export interface PoseActionClip {
+  id: string;
+  name: string;
+  nameEn: string;
+  category: string;
+  builtin: boolean;
+  loopAnim: boolean;
+  defaultRows: number;
+  defaultCols: number;
+  camera: PoseCameraConfig;
+  proportion: PoseProportionConfig;
+  keyframes: PoseKeyframe[];
+}
+
+export interface McpPoseBridgeRequest {
+  reqId: string;
+  action: PoseActionClip;
+  rows: number;
+  cols: number;
+  width: number;
+  height: number;
+  createdAtMs: number;
 }

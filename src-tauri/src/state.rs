@@ -29,6 +29,10 @@ pub struct ProviderProfile {
     pub comfy_config: Option<ComfyWorkflowConfig>,
 }
 
+fn default_close_behavior() -> String {
+    "ask".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -42,6 +46,8 @@ pub struct AppSettings {
     pub default_style: String,
     pub default_background: String,
     pub default_size: String,
+    #[serde(default = "default_close_behavior")]
+    pub close_behavior: String, // "ask" | "tray" | "exit"
 }
 
 impl Default for AppSettings {
@@ -68,6 +74,7 @@ impl Default for AppSettings {
             default_style: "default".to_string(),
             default_background: "white".to_string(),
             default_size: "1024x1024".to_string(),
+            close_behavior: default_close_behavior(),
         }
     }
 }
@@ -369,5 +376,39 @@ impl AppState {
         fs::write(&tmp, json)?;
         fs::rename(&tmp, &self.settings_path)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_settings_close_behavior_default_and_serde() {
+        let def = AppSettings::default();
+        assert_eq!(def.close_behavior, "ask");
+
+        // Legacy settings JSON without closeBehavior must deserialize cleanly to "ask"
+        let legacy_json = r#"{
+            "version": 3,
+            "theme": "dark",
+            "language": "zh-CN",
+            "activeProfileId": "prof_default",
+            "profiles": [],
+            "activeProject": "",
+            "defaultArchetype": "item_icon",
+            "defaultStyle": "default",
+            "defaultBackground": "white",
+            "defaultSize": "1024x1024"
+        }"#;
+        let parsed: AppSettings = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(parsed.close_behavior, "ask");
+
+        let mut custom = def.clone();
+        custom.close_behavior = "tray".to_string();
+        let raw = serde_json::to_string(&custom).unwrap();
+        assert!(raw.contains("\"closeBehavior\":\"tray\""));
+        let roundtrip: AppSettings = serde_json::from_str(&raw).unwrap();
+        assert_eq!(roundtrip.close_behavior, "tray");
     }
 }

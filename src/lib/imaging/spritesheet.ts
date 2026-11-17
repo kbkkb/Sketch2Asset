@@ -41,7 +41,8 @@ export interface SpriteSheetProcessOptions {
   pixelClean: boolean;
   smartIslandSlice?: boolean;
   preventClipping?: boolean;
-   trimOuterMargin?: boolean;
+  trimOuterMargin?: boolean;
+  preserveVerticalArc?: boolean;
   frameTweaks?: FrameTweak[];
 }
 
@@ -372,6 +373,8 @@ function detectOpaqueCellPivot(
 
 interface ExtractedCellCanvas {
   canvas: HTMLCanvasElement;
+  originOffsetX: number;
+  originOffsetY: number;
   pivot: {
     minX: number;
     minY: number;
@@ -451,7 +454,12 @@ function extractCellsByConnectedIslands(
             actualH
           );
           const pivot = detectOpaqueCellPivot(ctx, actualW, actualH, baselineRatio);
-          out.push({ canvas: cv, pivot });
+          out.push({
+            canvas: cv,
+            originOffsetX: c * cellW - sx0,
+            originOffsetY: r * cellH - sy0,
+            pivot
+          });
         }
       }
       return out;
@@ -492,7 +500,12 @@ function extractCellsByConnectedIslands(
         const ctx = cv.getContext('2d', { willReadFrequently: true })!;
         ctx.putImageData(sheetImg, -sx0, -sy0, sx0, sy0, actualW, actualH);
         const cData = ctx.getImageData(0, 0, actualW, actualH);
-        out.push({ canvas: cv, pivot: computeCharacterFootPivot(cData, actualW, actualH) });
+        out.push({
+          canvas: cv,
+          originOffsetX: c * cellW - sx0,
+          originOffsetY: r * cellH - sy0,
+          pivot: computeCharacterFootPivot(cData, actualW, actualH)
+        });
       }
     }
     return out;
@@ -697,7 +710,7 @@ function extractCellsByConnectedIslands(
     cv.height = extH;
     cv.getContext('2d')!.putImageData(imgData, 0, 0);
     const pivot = computeCharacterFootPivot(imgData, extW, extH);
-    return { canvas: cv, pivot };
+    return { canvas: cv, originOffsetX: padX, originOffsetY: padY, pivot };
   });
 }
 
@@ -755,12 +768,30 @@ export function sliceAndAlignSpriteSheet(
     opts.frameTweaks
   );
 
+  // 检测并保留跳跃/滞空动作的纵向高度弧线（避免空中帧被强行拉回地面，同时防止待机/奔跑/挥砍/倒地等地面动作被误判）
+  const relFootYs = extracted
+    .filter((item) => item.pivot.hasContent)
+    .map((item) => item.pivot.maxY - item.originOffsetY);
+  const minRelFootY = relFootYs.length > 0 ? Math.min(...relFootYs) : 0;
+  const maxRelFootY = relFootYs.length > 0 ? Math.max(...relFootYs) : 0;
+  const groundRelFootY = maxRelFootY;
+  const autoDetectedJumpArc = (() => {
+    if (relFootYs.length < 3) return false;
+    const firstNearGround = groundRelFootY - relFootYs[0]! <= baseCellH * 0.08;
+    const lastNearGround = groundRelFootY - relFootYs[relFootYs.length - 1]! <= baseCellH * 0.08;
+    const midFrames = relFootYs.slice(1, -1);
+    const maxMidLift = Math.max(...midFrames.map((y) => groundRelFootY - y));
+    return firstNearGround && lastNearGround && maxMidLift >= baseCellH * 0.12;
+  })();
+  const useVerticalArc = opts.preserveVerticalArc ?? autoDetectedJumpArc;
+
   // 4. 计算全序列在对齐到脚底重心后的最大左右跨度与上下高度，自适应扩容安全帧画布，彻底杜绝刀尖/特效出界被截断！
   let outW = baseCellW;
   let outH = baseCellH;
 
   if (preventClipping) {
     let maxHalfSpanX = baseCellW / 2;
+    let maxHalfSpanY = baseCellH / 2;
     let maxTopSpanY = Math.round(baseCellH * baselineRatio);
     let maxBotSpanY = Math.round(baseCellH * (1 - baselineRatio));
     // 预留固定安全边距（24px），画布尺寸由全序列内容本身唯一决定且保持完全恒定
@@ -772,23 +803,29 @@ export function sliceAndAlignSpriteSheet(
       if (opts.alignPivot) {
         // 关键：不要将 tweak.dx / tweak.dy 计入画布基础尺寸！
         // 画布尺寸必须保持绝对恒定，单帧微调是纯刚体平移，绝不产生缩放抖动
+        const frameRelFootY = p.maxY - item.originOffsetY;
+        const arcLift = useVerticalArc ? Math.max(0, groundRelFootY - frameRelFootY) : 0;
         const leftReach = p.centerX - p.minX + safetyMargin;
         const rightReach = p.maxX - p.centerX + safetyMargin;
-        const topReach = p.maxY - p.minY + safetyMargin;
+        const topReach = (p.maxY - p.minY) + arcLift + safetyMargin;
         maxHalfSpanX = Math.max(maxHalfSpanX, leftReach, rightReach);
         maxTopSpanY = Math.max(maxTopSpanY, topReach);
       } else {
-        const halfW = (p.maxX - p.minX) / 2 + safetyMargin;
-        const fullH = p.maxY - p.minY + safetyMargin * 2;
+        const cellCenterX = item.originOffsetX + baseCellW / 2;
+        const cellCenterY = item.originOffsetY + baseCellH / 2;
+        const halfW = Math.max(cellCenterX - p.minX, p.maxX - cellCenterX) + safetyMargin;
+        const halfH = Math.max(cellCenterY - p.minY, p.maxY - cellCenterY) + safetyMargin;
         maxHalfSpanX = Math.max(maxHalfSpanX, halfW);
-        maxTopSpanY = Math.max(maxTopSpanY, Math.round(fullH * baselineRatio));
+        maxHalfSpanY = Math.max(maxHalfSpanY, halfH);
       }
     });
 
     const neededW = Math.ceil(maxHalfSpanX * 2);
     const neededHFromTop = Math.ceil(maxTopSpanY / Math.max(0.5, baselineRatio));
     const neededHFromBot = Math.ceil(maxBotSpanY / Math.max(0.08, 1 - baselineRatio));
-    const neededH = Math.max(neededHFromTop, neededHFromBot);
+    const neededH = opts.alignPivot
+      ? Math.max(neededHFromTop, neededHFromBot)
+      : Math.ceil(maxHalfSpanY * 2);
 
     outW = Math.max(baseCellW, neededW + (neededW % 2));
     outH = Math.max(baseCellH, neededH + (neededH % 2));
@@ -815,13 +852,13 @@ export function sliceAndAlignSpriteSheet(
       let shiftX = tweak.dx;
       let shiftY = tweak.dy;
       if (opts.alignPivot) {
+        const frameRelFootY = pivot.maxY - item.originOffsetY;
+        const arcLift = useVerticalArc ? Math.max(0, groundRelFootY - frameRelFootY) : 0;
         shiftX += Math.round(targetCenterX - pivot.centerX);
-        shiftY += Math.round(targetBaselineY - pivot.maxY);
+        shiftY += Math.round((targetBaselineY - arcLift) - pivot.maxY);
       } else {
-        const expLeft = tweak.expandLeft ?? 0;
-        const expTop = tweak.expandTop ?? 0;
-        shiftX += Math.round((outW - baseCellW) / 2) - expLeft;
-        shiftY += Math.round((outH - baseCellH) / 2) - expTop;
+        shiftX += Math.round((outW - baseCellW) / 2) - item.originOffsetX;
+        shiftY += Math.round((outH - baseCellH) / 2) - item.originOffsetY;
       }
       octx.drawImage(rawCell, shiftX, shiftY);
     }

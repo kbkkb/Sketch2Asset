@@ -344,6 +344,18 @@ impl LibraryDb {
         Ok(())
     }
 
+    pub fn get_revision_token(&self) -> AppResult<String> {
+        let conn = self.conn.lock().unwrap();
+        let (asset_count, max_ts): (i64, i64) = conn.query_row(
+            "SELECT COUNT(*), COALESCE(MAX(created_at), 0) FROM assets",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let proj_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))?;
+        Ok(format!("{}:{}:{}", asset_count, max_ts, proj_count))
+    }
+
     fn map_asset_row(row: &rusqlite::Row) -> rusqlite::Result<AssetItem> {
         Ok(AssetItem {
             id: row.get(0)?,
@@ -357,5 +369,48 @@ impl LibraryDb {
             created_at: row.get(8)?,
             archetype: row.get(9).unwrap_or_else(|_| "item_icon".to_string()),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_revision_token_tracks_changes_and_wal_writes() {
+        let tmp_dir = std::env::temp_dir().join(format!(
+            "sketch2asset_db_rev_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let desktop_db = LibraryDb::open(&tmp_dir).unwrap();
+        assert_eq!(desktop_db.get_revision_token().unwrap(), "0:0:0");
+
+        desktop_db
+            .upsert_project("demo", "default", "", &[])
+            .unwrap();
+        assert_eq!(desktop_db.get_revision_token().unwrap(), "0:0:1");
+
+        let external_mcp_db = LibraryDb::open(&tmp_dir).unwrap();
+        external_mcp_db
+            .insert_asset(&AssetItem {
+                id: "ast_1".to_string(),
+                project: "demo".to_string(),
+                archetype: "sprite_sheet".to_string(),
+                file_path: "C:/tmp/a.png".to_string(),
+                prompt: "knight".to_string(),
+                model: "gpt-image-1".to_string(),
+                via: "images".to_string(),
+                width: 1536,
+                height: 1024,
+                created_at: 1_700_000_000_123,
+            })
+            .unwrap();
+
+        assert_eq!(
+            desktop_db.get_revision_token().unwrap(),
+            "1:1700000000123:1"
+        );
+
+        let _ = fs::remove_dir_all(&tmp_dir);
     }
 }

@@ -344,21 +344,21 @@ pub fn build_keyframe_choreography_prompt(user_prompt: &str, rows: u32, cols: u3
     } else if is_jump {
         if total <= 4 {
             vec![
-                "Deep Crouch Take-Off Preparation (ON GROUND BASELINE) — knees bent low, arms swung back coiled to jump, feet planted on ground line",
-                "Explosive Upward Launch & Ascending Tuck (AIRBORNE HIGH IN CELL) — body rising into upper half of cell, knees tucked high, feet lifted far above ground baseline",
-                "Peak Airborne Apex & Descending Stretch (HIGHEST POINT IN AIR) — suspended high near top of cell safe zone far above ground baseline, legs beginning to extend downward for landing",
-                "Landing Impact Cushion & Recovery (BACK ON GROUND BASELINE) — feet touching back down on ground line with bent knees absorbing landing impact",
+                "Take-Off Squat (IN-PLACE COLLIDER CENTERED, Vy = 0) — knees bent low in deep crouch, arms coiled back preparing to launch",
+                "Upward Launch & Ascent Tuck (IN-PLACE COLLIDER CENTERED, Vy > 0) — body stretched upward then knees tucked toward chest, torso kept centered in cell for game engine CapsuleCollider2D",
+                "Apex Float & Fall Transition (IN-PLACE COLLIDER CENTERED, Vy <= 0) — weightless mid-air pose transitioning into downward leg extension, torso centered in cell",
+                "Landing Impact Cushion (IN-PLACE COLLIDER CENTERED, ON GROUND) — bent knees absorbing landing impact",
             ]
         } else {
             vec![
-                "Deep Crouch Preparation (ON GROUND BASELINE) — knees bent low, arms swung back preparing to launch",
-                "Explosive Upward Launch (LEAVING GROUND) — legs fully extended pushing off ground, body rising steeply",
-                "Ascending Mid-Air Tuck (AIRBORNE HIGH) — knees tucked upward in upper cell region, feet high above ground baseline",
-                "High Apex Float (PEAK AIRBORNE HEIGHT) — suspended at highest point of jump arc far above ground baseline",
-                "Descending Fall (FALLING FROM AIR) — body tilting downward, legs extending toward ground",
-                "Landing Impact Cushion (BACK ON GROUND BASELINE) — feet touching back down on ground line with bent knees absorbing landing force",
-                "Rebound Stabilization (ON GROUND) — torso rising from crouch back to standing balance",
-                "Neutral Standing Recovery (ON GROUND) — upright balanced posture",
+                "Take-Off Squat Preparation (IN-PLACE COLLIDER CENTERED, Vy = 0) — knees bent low in deep crouch, arms swung back preparing to launch",
+                "Upward Launch Stretch (IN-PLACE COLLIDER CENTERED, Vy > 0 Rising) — legs pushing off in full upward stretch, torso centered in cell",
+                "Ascending Knee Tuck (IN-PLACE COLLIDER CENTERED, Vy > 0 Fast Ascent) — knees tucked tightly upward toward chest while torso stays anchored at cell center",
+                "Apex Suspension Float (IN-PLACE COLLIDER CENTERED, Vy ≈ 0 Peak) — weightless mid-air float posture with knees bent, torso centered in cell",
+                "Descending Fall Extension (IN-PLACE COLLIDER CENTERED, Vy < 0 Falling) — legs extending downward to reach for the ground, cape/hair trailing upward",
+                "Landing Impact Cushion (IN-PLACE COLLIDER CENTERED, Landing) — knees bent absorbing landing impact back on ground baseline",
+                "Rebound Stabilization (IN-PLACE) — torso rising from landing crouch back to neutral balance",
+                "Neutral Standing Recovery (IN-PLACE) — upright balanced posture",
             ]
         }
     } else if is_walk_or_run {
@@ -422,7 +422,7 @@ pub fn build_keyframe_choreography_prompt(user_prompt: &str, rows: u32, cols: u3
     }
 
     let baseline_rule = if is_jump {
-        "2. GROUND VS AIRBORNE VERTICAL ARC: Frame #1 (take-off) and the final Frame (landing) MUST have feet planted on the bottom ground baseline (86% cell height), while intermediate airborne frames MUST be drawn physically higher up in their cell with feet clearly elevated above the ground baseline to depict a true jump arc."
+        "2. GROUND VS AIRBORNE VERTICAL ARC (ENGINE IN-PLACE VELOCITY STATES): Keep the character's torso/collider center consistently anchored inside each cell (do NOT float the sprite into the top margin). Express the jump states purely through distinct limb & body mechanics for game engine VerticalVelocity / BlendTree playback (take-off squat -> upward launch stretch -> mid-air knee tuck -> apex suspension -> downward leg extension -> landing cushion)."
     } else if is_death {
         "2. NON-LOOPING COLLAPSE TO GROUND: Progress strictly from standing hit in Frame #1 to lying completely flat and motionless on the ground baseline in the final frame. Do NOT loop back to standing."
     } else {

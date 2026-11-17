@@ -3,6 +3,7 @@ pub mod error;
 pub mod library;
 pub mod matting;
 pub mod mcp;
+pub mod pose3d;
 pub mod postprocess;
 pub mod providers;
 pub mod secrets;
@@ -11,7 +12,9 @@ pub mod state;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::Manager;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SavedWindowBounds {
@@ -28,7 +31,7 @@ fn load_window_bounds(path: &Path) -> Option<SavedWindowBounds> {
 }
 
 fn save_window_bounds(window: &tauri::Window, path: &Path) {
-    if window.is_minimized().unwrap_or(false) {
+    if window.is_minimized().unwrap_or(false) || !window.is_visible().unwrap_or(true) {
         return;
     }
     let maximized = window.is_maximized().unwrap_or(false);
@@ -59,6 +62,14 @@ fn save_window_bounds(window: &tauri::Window, path: &Path) {
 
     if let Ok(json) = serde_json::to_string_pretty(&bounds) {
         let _ = fs::write(path, json);
+    }
+}
+
+pub(crate) fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
     }
 }
 
@@ -108,23 +119,82 @@ pub fn run() {
 
             let app_state = state::AppState::initialize(app_data_dir, workspace_dir)
                 .expect("Failed to initialize Sketch2Asset AppState");
+            let _ = pose3d::ensure_seeded_actions(&app_state.app_data_dir);
 
             app.manage(app_state);
+
+            let show_item = MenuItem::with_id(app, "tray_show", "显示主窗口 / Show Window", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "tray_quit", "彻底退出 / Exit", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+
+            let mut tray_builder = TrayIconBuilder::with_id("main-tray")
+                .tooltip("Sketch2Asset — AI Game Asset Forge")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app_handle, event| match event.id().as_ref() {
+                    "tray_show" => show_main_window(app_handle),
+                    "tray_quit" => app_handle.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if matches!(
+                        event,
+                        TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } | TrayIconEvent::DoubleClick {
+                            button: MouseButton::Left,
+                            ..
+                        }
+                    ) {
+                        show_main_window(tray.app_handle());
+                    }
+                });
+
+            if let Some(icon) = app.default_window_icon().cloned() {
+                tray_builder = tray_builder.icon(icon);
+            }
+            let _ = tray_builder.build(app);
+
             Ok(())
         })
         .on_window_event(|window, event| {
             if window.label() != "main" {
                 return;
             }
-            if matches!(
-                event,
-                tauri::WindowEvent::Resized(_)
-                    | tauri::WindowEvent::Moved(_)
-                    | tauri::WindowEvent::CloseRequested { .. }
-            ) {
-                let state = window.state::<state::AppState>();
-                let bounds_path = state.app_data_dir.join("window_bounds.json");
-                save_window_bounds(window, &bounds_path);
+            match event {
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_) => {
+                    let state = window.state::<state::AppState>();
+                    let bounds_path = state.app_data_dir.join("window_bounds.json");
+                    save_window_bounds(window, &bounds_path);
+                }
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    let state = window.state::<state::AppState>();
+                    let bounds_path = state.app_data_dir.join("window_bounds.json");
+                    save_window_bounds(window, &bounds_path);
+
+                    let close_behavior = state
+                        .settings
+                        .lock()
+                        .map(|s| s.close_behavior.clone())
+                        .unwrap_or_else(|_| "ask".to_string());
+
+                    match close_behavior.as_str() {
+                        "tray" => {
+                            api.prevent_close();
+                            let _ = window.hide();
+                        }
+                        "exit" => {
+                            window.app_handle().exit(0);
+                        }
+                        _ => {
+                            api.prevent_close();
+                            let _ = window.emit("app-close-requested", ());
+                        }
+                    }
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -156,10 +226,18 @@ pub fn run() {
             commands::run_studio_region_edit,
             commands::generate_character_asset,
             commands::check_app_update,
+            commands::get_library_revision,
+            commands::perform_window_close,
             commands::get_agent_hub_status,
             commands::install_agent_integration,
             commands::uninstall_agent_integration,
             commands::export_agent_skill_bundle,
+            commands::list_pose_actions,
+            commands::save_pose_action,
+            commands::delete_pose_action,
+            commands::render_pose_action_grid,
+            commands::poll_mcp_pose_request,
+            commands::complete_mcp_pose_request,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Sketch2Asset application");

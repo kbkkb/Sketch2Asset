@@ -6,7 +6,8 @@
     Square,
     X,
     KeyRound,
-    AlertCircle
+    AlertCircle,
+    Sparkles
   } from '@lucide/svelte';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { appStore } from '$lib/stores/settings.svelte';
@@ -19,7 +20,7 @@
     getCurrentWindow().toggleMaximize();
   }
   function closeWindow() {
-    getCurrentWindow().close();
+    void appStore.requestClose();
   }
 </script>
 
@@ -74,9 +75,15 @@
       <div data-tauri-drag-region class="leading-none">
         <div
           data-tauri-drag-region
-          class="font-display text-xs font-extrabold tracking-wider text-fg"
+          class="flex items-center gap-1.5 font-display text-xs font-extrabold tracking-wider text-fg"
         >
-          {i18n.t('app_title')}
+          <span data-tauri-drag-region>{i18n.t('app_title')}</span>
+          <span
+            data-tauri-drag-region
+            class="rounded border border-line bg-ink-2/90 px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-normal text-fg-muted"
+          >
+            v{appStore.appVersion || '0.2.1'}
+          </span>
         </div>
         <div
           data-tauri-drag-region
@@ -186,7 +193,45 @@
         <span>{i18n.t('nav_character')}</span>
       </button>
 
-      <!-- Tab 4: API & Settings (API 与设置) -->
+      <!-- Tab 4: Layer Decompose Workshop (拆图工坊 · 后续更新占位) -->
+      <button
+        type="button"
+        title={i18n.t('nav_decompose_soon')}
+        onclick={() => appStore.toast('info', i18n.t('nav_decompose_soon'))}
+        class="group flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-fg-muted transition-all hover:bg-ink-2 hover:text-fg"
+      >
+        <svg width="15" height="15" viewBox="0 0 20 20" fill="none" class="shrink-0">
+          <!-- Stacked 2.5D Layer Decomposition Plates -->
+          <path
+            d="M10 3L16.5 6.3L10 9.6L3.5 6.3L10 3Z"
+            fill="currentColor"
+            fill-opacity="0.25"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linejoin="round"
+          />
+          <path
+            d="M4.2 10.2L10 13.1L15.8 10.2"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+          <path
+            d="M4.2 13.9L10 16.8L15.8 13.9"
+            stroke="currentColor"
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+        <span>{i18n.t('nav_decompose')}</span>
+        <span class="rounded border border-line bg-ink-0/60 px-1 py-0.2 font-mono text-[9px] font-bold text-fg-subtle">
+          {i18n.t('nav_decompose_soon_badge')}
+        </span>
+      </button>
+
+      <!-- Tab 5: API & Settings (API 与设置) -->
       <button
         type="button"
         onclick={() => (appStore.activeView = 'settings')}
@@ -211,8 +256,20 @@
     </nav>
   </div>
 
-  <!-- Right: Active Provider Vault Status + Theme, Language & Native Window Controls -->
+  <!-- Right: Update Pill + Active Provider Vault Status + Theme, Language & Native Window Controls -->
   <div class="flex items-center gap-1.5">
+    {#if appStore.updateInfo?.hasUpdate}
+      <button
+        type="button"
+        onclick={() => appStore.openSettings('system')}
+        title={appStore.updateInfo.releaseUrl || i18n.t('about_view_release')}
+        class="mr-1 flex items-center gap-1.5 rounded-full border border-accent/60 bg-accent/15 px-2.5 py-1 text-[11px] font-bold whitespace-nowrap text-accent transition-colors hover:bg-accent hover:text-accent-ink"
+      >
+        <Sparkles size={12} strokeWidth={2.2} />
+        <span>{i18n.t('titlebar_new_version')} {appStore.updateInfo.latestVersion}</span>
+      </button>
+    {/if}
+
     {#if appStore.activeProfile}
       <button
         type="button"

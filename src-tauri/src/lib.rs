@@ -226,6 +226,7 @@ pub fn run() {
             commands::run_studio_region_edit,
             commands::generate_character_asset,
             commands::check_app_update,
+            commands::apply_app_update,
             commands::get_library_revision,
             commands::perform_window_close,
             commands::get_agent_hub_status,

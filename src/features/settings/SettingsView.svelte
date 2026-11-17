@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { listen } from '@tauri-apps/api/event';
   import {
     Plus,
     Trash2,
@@ -58,6 +59,42 @@
   let agentHub = $state<AgentHubStatus | null>(null);
   let busyAgentId = $state<string | null>(null);
   let activeSnippetTab = $state<'json' | 'toml' | 'cli' | 'skill'>('json');
+
+  // In-app incremental update state
+  let isApplyingUpdate = $state(false);
+  let updateProgressStage = $state<'downloading' | 'extracting' | 'applying' | ''>('');
+  let updateProgressPct = $state(0);
+
+  function formatPatchSize(bytes?: number | null): string {
+    if (!bytes || bytes <= 0) return '';
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  async function handleApplyInAppUpdate() {
+    const patchUrl = appStore.updateInfo?.patchUrl;
+    if (!patchUrl || isApplyingUpdate) return;
+    isApplyingUpdate = true;
+    updateProgressStage = 'downloading';
+    updateProgressPct = 0;
+
+    let unlisten: (() => void) | null = null;
+    try {
+      unlisten = await listen<{
+        stage: 'downloading' | 'extracting' | 'applying';
+        percent: number;
+      }>('app-update-progress', (ev) => {
+        updateProgressStage = ev.payload.stage;
+        updateProgressPct = ev.payload.percent ?? 0;
+      });
+      await api.applyAppUpdate(patchUrl);
+    } catch (e: any) {
+      appStore.toast('err', e?.message ?? 'In-app update failed');
+      isApplyingUpdate = false;
+      updateProgressStage = '';
+    } finally {
+      if (unlisten) unlisten();
+    }
+  }
 
   const IMG_REGEX =
     /image|img|dall|flux|seedream|seededit|banana|imagen|stable|sdxl|sd3|midjourney|\bmj\b|kolors|cogview|wanx|hunyuan-image|ideogram|recraft|playground|pixart|photon|irag/i;
@@ -1647,13 +1684,42 @@
                   </p>
                 </div>
 
-                <div class="flex items-center gap-2.5">
+                <div class="flex flex-wrap items-center gap-2.5">
+                  {#if appStore.updateInfo?.hasUpdate && appStore.updateInfo.patchUrl}
+                    <button
+                      type="button"
+                      disabled={isApplyingUpdate}
+                      onclick={handleApplyInAppUpdate}
+                      class="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-xs font-bold whitespace-nowrap text-ink-0 transition-opacity hover:opacity-90 disabled:opacity-60"
+                    >
+                      {#if isApplyingUpdate}
+                        <Loader2 size={14} class="animate-spin" />
+                        <span>
+                          {#if updateProgressStage === 'extracting'}
+                            {i18n.t('about_updating_extracting')}
+                          {:else if updateProgressStage === 'applying'}
+                            {i18n.t('about_updating_applying')}
+                          {:else}
+                            {i18n.t('about_updating_downloading')} {updateProgressPct}%
+                          {/if}
+                        </span>
+                      {:else}
+                        <Download size={14} />
+                        <span>
+                          {i18n.t('about_apply_patch')}
+                          {#if appStore.updateInfo.patchSizeBytes}
+                            ({formatPatchSize(appStore.updateInfo.patchSizeBytes)})
+                          {/if}
+                        </span>
+                      {/if}
+                    </button>
+                  {/if}
                   {#if appStore.updateInfo?.hasUpdate}
                     <a
                       href={appStore.updateInfo.releaseUrl}
                       target="_blank"
                       rel="noreferrer"
-                      class="flex shrink-0 items-center gap-1.5 rounded-lg bg-accent px-3.5 py-2 text-xs font-bold whitespace-nowrap text-ink-0 transition-opacity hover:opacity-90"
+                      class="flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-ink-2 px-3.5 py-2 text-xs font-semibold whitespace-nowrap text-fg transition-colors hover:border-accent"
                     >
                       <ExternalLink size={14} />
                       <span>{i18n.t('about_view_release')}</span>
@@ -1661,7 +1727,7 @@
                   {/if}
                   <button
                     type="button"
-                    disabled={appStore.isCheckingUpdate}
+                    disabled={appStore.isCheckingUpdate || isApplyingUpdate}
                     onclick={() => appStore.refreshUpdateCheck(false)}
                     class="flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-ink-2 px-3.5 py-2 text-xs font-semibold whitespace-nowrap text-fg hover:border-accent disabled:opacity-50"
                   >
@@ -1675,6 +1741,16 @@
                   </button>
                 </div>
               </div>
+              {#if isApplyingUpdate}
+                <div class="mt-3 flex flex-col gap-1.5">
+                  <div class="h-1.5 w-full overflow-hidden rounded-full bg-ink-2">
+                    <div
+                      class="h-full bg-accent transition-all duration-150"
+                      style="width: {updateProgressPct}%"
+                    ></div>
+                  </div>
+                </div>
+              {/if}
             </div>
           {:else if appStore.settingsTab === 'agents'}
             <div class="flex flex-col gap-5">

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Release-v0.2.1-84cc16.svg" alt="Version v0.2.1">
+  <img src="https://img.shields.io/badge/Release-v0.2.2-84cc16.svg" alt="Version v0.2.2">
   <img src="https://img.shields.io/badge/Architecture-Tauri_2_%2B_Rust-orange.svg" alt="Tauri 2 + Rust">
   <img src="https://img.shields.io/badge/Frontend-Svelte_5_%2B_Three.js-ff3e00.svg" alt="Svelte 5 + Three.js">
   <img src="https://img.shields.io/badge/Matting-ONNX_DirectML_GPU-10b981.svg" alt="ONNX Runtime DirectML">

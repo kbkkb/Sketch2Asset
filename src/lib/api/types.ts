@@ -215,6 +215,9 @@ export interface AppUpdateInfo {
   releaseUrl: string;
   releaseNotes: string;
   publishedAt: string;
+  patchUrl?: string | null;
+  patchName?: string | null;
+  patchSizeBytes?: number | null;
 }
 
 export interface AgentTargetInfo {

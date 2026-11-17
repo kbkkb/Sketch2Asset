@@ -2,7 +2,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 use crate::error::{AppError, AppErrorCode, AppResult};
 use crate::library::db::{AssetItem, ProjectInfo};
@@ -1383,6 +1383,49 @@ pub struct AppUpdateInfo {
     pub release_url: String,
     pub release_notes: String,
     pub published_at: String,
+    pub patch_url: Option<String>,
+    pub patch_name: Option<String>,
+    pub patch_size_bytes: Option<u64>,
+}
+
+pub(crate) fn pick_release_patch_asset(
+    assets: &[serde_json::Value],
+) -> (Option<String>, Option<String>, Option<u64>) {
+    let find_suffix = |suffix: &str| -> Option<(String, String, Option<u64>)> {
+        for item in assets {
+            let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
+            let url = item
+                .get("browser_download_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if name.ends_with(suffix) && !url.is_empty() {
+                let size = item.get("size").and_then(|v| v.as_u64());
+                return Some((url.to_string(), name.to_string(), size));
+            }
+        }
+        None
+    };
+
+    if let Some((u, n, s)) = find_suffix("_Patch_x64.zip").or_else(|| find_suffix("_Portable_x64.zip"))
+    {
+        (Some(u), Some(n), s)
+    } else {
+        (None, None, None)
+    }
+}
+
+pub(crate) fn validate_release_download_url(url: &str) -> AppResult<()> {
+    let trimmed = url.trim();
+    if !trimmed.starts_with("https://github.com/kbkkb/Sketch2Asset/releases/download/")
+        || !trimmed.ends_with(".zip")
+    {
+        return Err(AppError::new(
+            AppErrorCode::InvalidInput,
+            "Invalid update package URL: only official GitHub release .zip assets are allowed",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn parse_semver_tuple(s: &str) -> Option<(u64, u64, u64)> {
@@ -1439,6 +1482,9 @@ pub async fn check_app_update(state: State<'_, AppState>) -> AppResult<AppUpdate
                 release_url: "https://github.com/kbkkb/Sketch2Asset/releases".to_string(),
                 release_notes: String::new(),
                 published_at: String::new(),
+                patch_url: None,
+                patch_name: None,
+                patch_size_bytes: None,
             });
         }
     };
@@ -1466,6 +1512,11 @@ pub async fn check_app_update(state: State<'_, AppState>) -> AppResult<AppUpdate
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    let (patch_url, patch_name, patch_size_bytes) = json
+        .get("assets")
+        .and_then(|v| v.as_array())
+        .map(|arr| pick_release_patch_asset(arr))
+        .unwrap_or((None, None, None));
 
     let clean_tag = tag_name.trim_start_matches(['v', 'V']).trim();
     let has_update = is_semver_newer(&tag_name, &current_version);
@@ -1481,7 +1532,210 @@ pub async fn check_app_update(state: State<'_, AppState>) -> AppResult<AppUpdate
         release_url,
         release_notes,
         published_at,
+        patch_url,
+        patch_name,
+        patch_size_bytes,
     })
+}
+
+#[tauri::command]
+pub async fn apply_app_update(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    download_url: String,
+) -> AppResult<()> {
+    use std::io::Write;
+    #[cfg(target_os = "windows")]
+    use std::os::windows::process::CommandExt;
+
+    validate_release_download_url(&download_url)?;
+
+    let current_exe = std::env::current_exe().map_err(|e| {
+        AppError::new(
+            AppErrorCode::Io,
+            format!("Failed to locate current executable: {e}"),
+        )
+    })?;
+    let app_dir = current_exe.parent().ok_or_else(|| {
+        AppError::new(AppErrorCode::Io, "Failed to resolve application directory")
+    })?;
+
+    // Probe write permission before downloading so UAC-protected directories fail fast with clear advice
+    let probe_path = app_dir.join(".s2a_update_probe");
+    if let Err(e) = fs::write(&probe_path, b"ok") {
+        return Err(AppError::new(
+            AppErrorCode::Io,
+            format!(
+                "当前安装目录不可直接写入 ({e})，请点击「前往 GitHub 下载」使用安装器升级。"
+            ),
+        ));
+    }
+    let _ = fs::remove_file(&probe_path);
+
+    let staging_dir = std::env::temp_dir().join(format!(
+        "sketch2asset_update_{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let extracted_dir = staging_dir.join("extracted");
+    fs::create_dir_all(&extracted_dir).map_err(|e| {
+        AppError::new(AppErrorCode::Io, format!("Failed to create staging dir: {e}"))
+    })?;
+    let zip_path = staging_dir.join("patch.zip");
+
+    let _ = app.emit(
+        "app-update-progress",
+        serde_json::json!({ "stage": "downloading", "downloaded": 0u64, "total": 0u64, "percent": 0u8 }),
+    );
+
+    let mut resp = state
+        .http
+        .get(download_url.trim())
+        .header("User-Agent", "Sketch2Asset-Desktop")
+        .send()
+        .await
+        .map_err(|e| {
+            let _ = fs::remove_dir_all(&staging_dir);
+            AppError::new(AppErrorCode::Network, format!("Download failed: {e}"))
+        })?;
+
+    if !resp.status().is_success() {
+        let code = resp.status();
+        let _ = fs::remove_dir_all(&staging_dir);
+        return Err(AppError::new(
+            AppErrorCode::Network,
+            format!("Download failed with HTTP status {code}"),
+        ));
+    }
+
+    let total_bytes = resp.content_length().unwrap_or(0);
+    let mut downloaded: u64 = 0;
+    let mut last_pct: u8 = 0;
+
+    {
+        let mut out_file = fs::File::create(&zip_path).map_err(|e| {
+            let _ = fs::remove_dir_all(&staging_dir);
+            AppError::new(AppErrorCode::Io, format!("Failed to create patch file: {e}"))
+        })?;
+        while let Some(chunk) = resp.chunk().await.map_err(|e| {
+            let _ = fs::remove_dir_all(&staging_dir);
+            AppError::new(AppErrorCode::Network, format!("Stream interrupted: {e}"))
+        })? {
+            out_file.write_all(&chunk).map_err(|e| {
+                let _ = fs::remove_dir_all(&staging_dir);
+                AppError::new(AppErrorCode::Io, format!("Failed to write patch file: {e}"))
+            })?;
+            downloaded += chunk.len() as u64;
+            let pct = if total_bytes > 0 {
+                ((downloaded.saturating_mul(100)) / total_bytes).min(99) as u8
+            } else {
+                0
+            };
+            if pct != last_pct || total_bytes == 0 {
+                last_pct = pct;
+                let _ = app.emit(
+                    "app-update-progress",
+                    serde_json::json!({
+                        "stage": "downloading",
+                        "downloaded": downloaded,
+                        "total": total_bytes,
+                        "percent": pct
+                    }),
+                );
+            }
+        }
+    }
+
+    let _ = app.emit(
+        "app-update-progress",
+        serde_json::json!({ "stage": "extracting", "downloaded": downloaded, "total": total_bytes, "percent": 100u8 }),
+    );
+
+    // Extract safely via pure-Rust zip crate
+    let zip_file = fs::File::open(&zip_path).map_err(|e| {
+        let _ = fs::remove_dir_all(&staging_dir);
+        AppError::new(AppErrorCode::Io, format!("Failed to open patch archive: {e}"))
+    })?;
+    let mut archive = zip::ZipArchive::new(zip_file).map_err(|e| {
+        let _ = fs::remove_dir_all(&staging_dir);
+        AppError::new(AppErrorCode::InvalidInput, format!("Corrupted patch archive: {e}"))
+    })?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| {
+            let _ = fs::remove_dir_all(&staging_dir);
+            AppError::new(AppErrorCode::Io, format!("Failed to read zip entry: {e}"))
+        })?;
+        let Some(rel_path) = entry.enclosed_name().map(|p| p.to_path_buf()) else {
+            continue;
+        };
+        let dest = extracted_dir.join(rel_path);
+        if entry.is_dir() {
+            let _ = fs::create_dir_all(&dest);
+        } else {
+            if let Some(parent) = dest.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let mut outfile = fs::File::create(&dest).map_err(|e| {
+                let _ = fs::remove_dir_all(&staging_dir);
+                AppError::new(AppErrorCode::Io, format!("Failed to extract file: {e}"))
+            })?;
+            std::io::copy(&mut entry, &mut outfile).map_err(|e| {
+                let _ = fs::remove_dir_all(&staging_dir);
+                AppError::new(AppErrorCode::Io, format!("Failed to write extracted file: {e}"))
+            })?;
+        }
+    }
+
+    let new_exe = extracted_dir.join("Sketch2Asset.exe");
+    let exe_meta = fs::metadata(&new_exe).map_err(|_| {
+        let _ = fs::remove_dir_all(&staging_dir);
+        AppError::new(
+            AppErrorCode::InvalidInput,
+            "Patch archive does not contain Sketch2Asset.exe",
+        )
+    })?;
+    if exe_meta.len() < 1_000_000 {
+        let _ = fs::remove_dir_all(&staging_dir);
+        return Err(AppError::new(
+            AppErrorCode::InvalidInput,
+            "Extracted Sketch2Asset.exe appears incomplete",
+        ));
+    }
+
+    let _ = app.emit(
+        "app-update-progress",
+        serde_json::json!({ "stage": "applying", "downloaded": downloaded, "total": total_bytes, "percent": 100u8 }),
+    );
+
+    #[cfg(target_os = "windows")]
+    {
+        let script_path = staging_dir.join("apply_update.cmd");
+        let extracted_str = extracted_dir.to_string_lossy();
+        let app_dir_str = app_dir.to_string_lossy();
+        let current_exe_str = current_exe.to_string_lossy();
+        let staging_str = staging_dir.to_string_lossy();
+
+        let script = format!(
+            "@echo off\r\nchcp 65001 >nul\r\ntimeout /t 1 /nobreak >nul\r\ntaskkill /F /IM sketch2asset-mcp.exe >nul 2>&1\r\nrobocopy \"{extracted_str}\" \"{app_dir_str}\" /E /IS /IT /R:20 /W:1 >nul\r\nstart \"\" \"{current_exe_str}\"\r\ntimeout /t 2 /nobreak >nul\r\nrmdir /s /q \"{staging_str}\" >nul 2>&1\r\nexit /b 0\r\n"
+        );
+        fs::write(&script_path, script.as_bytes()).map_err(|e| {
+            AppError::new(AppErrorCode::Io, format!("Failed to write update script: {e}"))
+        })?;
+
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        std::process::Command::new("cmd")
+            .args(["/C", &script_path.to_string_lossy()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| {
+                AppError::new(AppErrorCode::Io, format!("Failed to launch updater: {e}"))
+            })?;
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        app.exit(0);
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1699,5 +1953,38 @@ mod tests {
         assert!(!is_semver_newer("", "0.2.1"));
         assert!(!is_semver_newer("invalid", "0.2.1"));
         assert!(is_semver_newer("V0.3", "0.2.1"));
+    }
+
+    #[test]
+    fn test_pick_release_patch_asset_and_url_validation() {
+        let with_patch = vec![
+            serde_json::json!({
+                "name": "Sketch2Asset_v0.2.2_x64_Setup.exe",
+                "browser_download_url": "https://github.com/kbkkb/Sketch2Asset/releases/download/v0.2.2/Sketch2Asset_v0.2.2_x64_Setup.exe",
+                "size": 25000000
+            }),
+            serde_json::json!({
+                "name": "Sketch2Asset_v0.2.2_Portable_x64.zip",
+                "browser_download_url": "https://github.com/kbkkb/Sketch2Asset/releases/download/v0.2.2/Sketch2Asset_v0.2.2_Portable_x64.zip",
+                "size": 28000000
+            }),
+            serde_json::json!({
+                "name": "Sketch2Asset_v0.2.2_Patch_x64.zip",
+                "browser_download_url": "https://github.com/kbkkb/Sketch2Asset/releases/download/v0.2.2/Sketch2Asset_v0.2.2_Patch_x64.zip",
+                "size": 11000000
+            }),
+        ];
+        let (url, name, size) = pick_release_patch_asset(&with_patch);
+        assert_eq!(name.as_deref(), Some("Sketch2Asset_v0.2.2_Patch_x64.zip"));
+        assert_eq!(size, Some(11000000));
+        assert!(validate_release_download_url(url.as_deref().unwrap()).is_ok());
+
+        let fallback_portable = vec![with_patch[0].clone(), with_patch[1].clone()];
+        let (_, fb_name, fb_size) = pick_release_patch_asset(&fallback_portable);
+        assert_eq!(fb_name.as_deref(), Some("Sketch2Asset_v0.2.2_Portable_x64.zip"));
+        assert_eq!(fb_size, Some(28000000));
+
+        assert!(validate_release_download_url("https://evil.example.com/patch.zip").is_err());
+        assert!(validate_release_download_url("https://github.com/kbkkb/Sketch2Asset/releases/download/v0.2.2/setup.exe").is_err());
     }
 }

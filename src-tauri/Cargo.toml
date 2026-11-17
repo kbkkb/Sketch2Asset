@@ -1,6 +1,6 @@
 [package]
 name = "sketch2asset"
-version = "0.2.1"
+version = "0.2.2"
 description = "Sketch2Asset — AI Game Asset Forge Desktop Client"
 authors = ["kb"]
 edition = "2021"
@@ -34,3 +34,4 @@ chrono = "0.4"
 dirs = "6"
 ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "directml", "half", "api-24"] }
 half = "2.1"
+zip = { version = "2", default-features = false, features = ["deflate"] }

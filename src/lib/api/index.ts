@@ -119,6 +119,7 @@ export const api = {
   generateCharacterAsset: (payload: CharacterGeneratePayload) =>
     call<CharacterGenerateResponse>('generate_character_asset', { payload }),
   checkAppUpdate: () => call<AppUpdateInfo>('check_app_update'),
+  applyAppUpdate: (downloadUrl: string) => call<void>('apply_app_update', { downloadUrl }),
   performWindowClose: (action: 'tray' | 'exit') =>
     call<void>('perform_window_close', { action }),
   getAgentHubStatus: () => call<AgentHubStatus>('get_agent_hub_status'),

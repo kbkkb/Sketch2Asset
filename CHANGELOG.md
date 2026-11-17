@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [0.2.2] - 2026-11-17
+
+### ✨ 新增功能 (Added)
+
+- **应用内轻量增量更新 (In-App Incremental Patch Updater)**
+  - `check_app_update` 自动识别 Release 中的轻量补丁包 `*_Patch_x64.zip`（仅含 `Sketch2Asset.exe`、`sketch2asset-mcp.exe` 与文档，跳过不变的 ~40 MB DirectML/ONNX 运行库；未提供补丁包时自动回退匹配 `*_Portable_x64.zip`）。
+  - 新增 `apply_app_update` 命令：校验官方 GitHub Release 白名单地址、流式下载并实时推送 `app-update-progress` 百分比进度、Pure-Rust `zip` 安全解压校验，支持在当前程序退出后原地替换并自动重启新版本（如安装目录受系统保护，则提前提示使用安装器升级）。
+  - 设置页「关于与更新」卡片新增 **「应用内增量更新」** 一键按钮与实时下载进度条，同时兼容安装版与绿色便携版。
+
+### English Summary (`v0.2.2`)
+
+- **Added**:
+  - In-app lightweight incremental patch updater (`apply_app_update` + `Patch_x64.zip` auto-detection with `Portable_x64.zip` fallback), featuring real-time download progress bar, URL allowlist & zip extraction safety checks, write-permission preflight, and automatic restart on Windows for both installed and portable editions.
+
+---
+
 ## [0.2.1] - 2026-11-17
 
 ### ✨ 新增功能 (Added)

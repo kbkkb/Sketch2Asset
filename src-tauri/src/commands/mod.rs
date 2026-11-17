@@ -1739,6 +1739,42 @@ pub async fn apply_app_update(
 }
 
 #[tauri::command]
+pub fn open_external_url(url: String) -> AppResult<()> {
+    let trimmed = url.trim();
+    if (!trimmed.starts_with("https://") && !trimmed.starts_with("http://"))
+        || trimmed.chars().any(|c| c.is_control() || c == '"')
+    {
+        return Err(AppError::new(
+            AppErrorCode::InvalidInput,
+            "Invalid external URL",
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", trimmed])
+            .spawn()
+            .map_err(|e| AppError::new(AppErrorCode::Io, format!("Failed to open browser: {e}")))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(trimmed)
+            .spawn()
+            .map_err(|e| AppError::new(AppErrorCode::Io, format!("Failed to open browser: {e}")))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(trimmed)
+            .spawn()
+            .map_err(|e| AppError::new(AppErrorCode::Io, format!("Failed to open browser: {e}")))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_library_revision(state: State<'_, AppState>) -> AppResult<String> {
     state.db.get_revision_token()
 }

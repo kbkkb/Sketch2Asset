@@ -227,6 +227,7 @@ pub fn run() {
             commands::generate_character_asset,
             commands::check_app_update,
             commands::apply_app_update,
+            commands::open_external_url,
             commands::get_library_revision,
             commands::perform_window_close,
             commands::get_agent_hub_status,

@@ -1715,15 +1715,17 @@
                     </button>
                   {/if}
                   {#if appStore.updateInfo?.hasUpdate}
-                    <a
-                      href={appStore.updateInfo.releaseUrl}
-                      target="_blank"
-                      rel="noreferrer"
+                    <button
+                      type="button"
+                      onclick={() =>
+                        api
+                          .openExternalUrl(appStore.updateInfo!.releaseUrl)
+                          .catch((e: any) => appStore.toast('err', e?.message ?? 'Open URL failed'))}
                       class="flex shrink-0 items-center gap-1.5 rounded-lg border border-line bg-ink-2 px-3.5 py-2 text-xs font-semibold whitespace-nowrap text-fg transition-colors hover:border-accent"
                     >
                       <ExternalLink size={14} />
                       <span>{i18n.t('about_view_release')}</span>
-                    </a>
+                    </button>
                   {/if}
                   <button
                     type="button"

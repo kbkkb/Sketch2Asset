@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
     Users,
     Shirt,
@@ -8,6 +9,7 @@
     Sparkles,
     Play,
     Pause,
+    Square,
     SkipBack,
     SkipForward,
     Upload,
@@ -31,7 +33,8 @@
     Maximize2,
     Trash2,
     Eye,
-    Check
+    Check,
+    Layers
   } from '@lucide/svelte';
   import { api, assetUrl } from '$lib/api';
   import type { AssetItem, PoseActionClip } from '$lib/api/types';
@@ -214,6 +217,14 @@
   let autoCapture3DPose = $state(true);
   let externalMcpClip = $state<PoseActionClip | null>(null);
   let mcpPollTimer: ReturnType<typeof setInterval> | null = null;
+  let unlistenMcp: UnlistenFn | null = null;
+  let mcpCharTimer: ReturnType<typeof setInterval> | null = null;
+  let mcpCharTask = $state<{
+    taskId: string;
+    subMode: string;
+    prompt: string;
+    elapsedSec: number;
+  } | null>(null);
 
   // Slot B: 待切帧与动画预览的「序列帧网格大图」
   let spriteSheetCanvas: HTMLCanvasElement | null = null;
@@ -628,7 +639,10 @@
 
     window.addEventListener('keydown', handleWindowKeyDown);
 
-    mcpPollTimer = setInterval(async () => {
+    let isHandlingMcpPose = false;
+    async function processPendingMcpPoseRequest() {
+      if (isHandlingMcpPose) return;
+      isHandlingMcpPose = true;
       try {
         const req = await api.pollMcpPoseRequest();
         if (req && req.reqId && req.action) {
@@ -644,13 +658,127 @@
         }
       } catch {
         // ignore polling error when backend is idle
+      } finally {
+        isHandlingMcpPose = false;
       }
-    }, 500);
+    }
+
+    unlistenMcp = await listen<any>('mcp-ui-event', async (ev) => {
+      const p = ev.payload ?? {};
+      if (p.kind === 'pose_render_requested') {
+        await processPendingMcpPoseRequest();
+        return;
+      }
+      if (p.kind === 'character_started') {
+        const sub = p.subMode || 'spritesheet';
+        if (sub === 'spritesheet') {
+          activeModule = 'spritesheet';
+          if (p.prompt) spriteExtraPrompt = p.prompt;
+        } else if (sub === 'expression') {
+          activeModule = 'expression';
+          if (p.prompt) exprPrompt = p.prompt;
+        } else {
+          activeModule = 'turnaround_skin';
+          designTab = sub === 'outfit' ? 'skin' : 'turnaround';
+          if (p.prompt) {
+            if (sub === 'outfit') skinPrompt = p.prompt;
+            else turnaroundPrompt = p.prompt;
+          }
+        }
+        isGenerating = true;
+        if (mcpCharTimer) clearInterval(mcpCharTimer);
+        const tStart = Date.now();
+        mcpCharTask = {
+          taskId: p.taskId,
+          subMode: sub,
+          prompt: p.prompt || '',
+          elapsedSec: 0
+        };
+        mcpCharTimer = setInterval(() => {
+          if (mcpCharTask) {
+            mcpCharTask = {
+              ...mcpCharTask,
+              elapsedSec: Math.floor((Date.now() - tStart) / 1000)
+            };
+          }
+        }, 500);
+      } else if (p.kind === 'character_completed') {
+        if (mcpCharTimer) {
+          clearInterval(mcpCharTimer);
+          mcpCharTimer = null;
+        }
+        isGenerating = false;
+        mcpCharTask = null;
+        await refreshGallery();
+        if (p.asset?.filePath) {
+          const sub = p.subMode || 'spritesheet';
+          try {
+            if (sub === 'spritesheet') {
+              await loadSpriteSheetAsset(p.asset, true);
+            } else if (sub === 'turnaround') {
+              const durl = await api.readImageDataUrl(p.asset.filePath);
+              turnaroundAssetId = p.asset.id;
+              await loadTurnaroundFromDataUrl(durl);
+            } else if (sub === 'outfit') {
+              const durl = await api.readImageDataUrl(p.asset.filePath);
+              skinResultAsset = p.asset;
+              skinResultDataUrl = durl;
+            } else if (sub === 'expression') {
+              const durl = await api.readImageDataUrl(p.asset.filePath);
+              exprSheetAssetId = p.asset.id;
+              await loadExpressionSheetFromDataUrl(durl);
+            }
+          } catch {
+            // gallery refresh already captured asset
+          }
+        }
+        appStore.toast(
+          'ok',
+          i18n.locale === 'en' ? 'MCP character task complete' : 'AI Agent 角色工坊生成完成'
+        );
+      } else if (p.kind === 'character_cancelled') {
+        if (mcpCharTimer) {
+          clearInterval(mcpCharTimer);
+          mcpCharTimer = null;
+        }
+        isGenerating = false;
+        mcpCharTask = null;
+        appStore.toast(
+          'info',
+          i18n.locale === 'en' ? 'MCP character task cancelled' : '已手动中止 AI Agent 角色生成'
+        );
+      } else if (p.kind === 'character_failed') {
+        if (mcpCharTimer) {
+          clearInterval(mcpCharTimer);
+          mcpCharTimer = null;
+        }
+        isGenerating = false;
+        mcpCharTask = null;
+        appStore.toast('err', p.error || 'MCP character generation failed');
+      } else if (p.kind === 'pose_updated') {
+        activeModule = 'spritesheet';
+        await loadPoseClips();
+        if (p.posePath) {
+          try {
+            spritePoseRefDataUrl = await api.readImageDataUrl(p.posePath);
+            spritePoseRefLabel = p.actionId ? `3D: ${p.actionId}` : 'MCP 3D';
+          } catch {
+            // ignore
+          }
+        }
+      }
+    });
+
+    mcpPollTimer = setInterval(() => {
+      void processPendingMcpPoseRequest();
+    }, 1500);
   });
 
   onDestroy(() => {
     if (animTimer) clearInterval(animTimer);
     if (mcpPollTimer) clearInterval(mcpPollTimer);
+    if (mcpCharTimer) clearInterval(mcpCharTimer);
+    unlistenMcp?.();
     if (typeof window !== 'undefined') {
       window.removeEventListener('keydown', handleWindowKeyDown);
     }
@@ -1990,6 +2118,30 @@
 
   <!-- CENTER & RIGHT: Active Module Workbench + Bottom Asset Filmstrip -->
   <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
+    {#if mcpCharTask}
+      <div
+        class="mx-4 mt-3 flex items-center justify-between gap-3 rounded-xl border border-accent/50 bg-accent/10 px-3.5 py-2 text-xs shadow-sm"
+      >
+        <div class="flex min-w-0 items-center gap-2">
+          <Loader2 size={14} class="shrink-0 animate-spin text-accent" />
+          <span class="rounded bg-accent/20 px-1.5 py-0.5 font-mono text-[10px] font-bold text-accent">
+            MCP
+          </span>
+          <span class="shrink-0 font-bold text-fg">
+            {i18n.locale === 'en' ? 'AI Agent Generating' : 'AI Agent 生成中'} ({mcpCharTask.elapsedSec}s)
+          </span>
+          <span class="truncate text-fg-muted">{mcpCharTask.prompt}</span>
+        </div>
+        <button
+          type="button"
+          onclick={() => api.cancelMcpTask(mcpCharTask!.taskId)}
+          class="flex shrink-0 items-center gap-1 rounded-lg border border-err/60 bg-err/15 px-2.5 py-1 text-[11px] font-bold text-err hover:bg-err hover:text-white"
+        >
+          <Square size={10} fill="currentColor" />
+          <span>{i18n.locale === 'en' ? 'Stop' : '中止'}</span>
+        </button>
+      </div>
+    {/if}
     <!-- ====================================================================== -->
     <!-- MODULE 1: Turnaround & Skinning Studio                                 -->
     <!-- ====================================================================== -->
@@ -4235,6 +4387,18 @@
     >
       <Sliders size={13} />
       <span>{i18n.t('asset_send_to_studio')}</span>
+    </button>
+
+    <button
+      type="button"
+      onclick={() => {
+        charContextMenu = null;
+        appStore.openInDecompose(target);
+      }}
+      class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-fg hover:bg-ink-2 hover:text-accent"
+    >
+      <Layers size={13} />
+      <span>{i18n.locale === 'en' ? 'Send to Layer Split' : '送入拆图工坊'}</span>
     </button>
 
     <button

@@ -1193,7 +1193,33 @@ pub fn render_pose_via_bridge_or_fallback(
     width: u32,
     height: u32,
 ) -> AppResult<(Vec<u8>, &'static str)> {
+    render_pose_via_bridge_or_fallback_with_notify(
+        app_data_dir,
+        clip,
+        rows,
+        cols,
+        width,
+        height,
+        None::<fn(&str)>,
+    )
+}
+
+pub fn render_pose_via_bridge_or_fallback_with_notify<F>(
+    app_data_dir: &Path,
+    clip: &PoseActionClip,
+    rows: u32,
+    cols: u32,
+    width: u32,
+    height: u32,
+    on_queued: Option<F>,
+) -> AppResult<(Vec<u8>, &'static str)>
+where
+    F: FnOnce(&str),
+{
     let req_id = push_live_action_to_bridge(app_data_dir, clip, rows, cols, width, height);
+    if let Some(cb) = on_queued {
+        cb(&req_id);
+    }
     let resp_path = bridge_dir(app_data_dir).join(format!("response_{}.png", req_id));
 
     let had_heartbeat = is_desktop_heartbeat_fresh(app_data_dir, 3000);

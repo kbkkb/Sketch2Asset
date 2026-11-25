@@ -18,10 +18,11 @@ export interface ToastMessage {
 class AppStore {
   settings = $state<AppSettings | null>(null);
   projects = $state<ProjectInfo[]>([]);
-  activeView = $state<'generate' | 'studio' | 'character' | 'settings'>('generate');
+  activeView = $state<'generate' | 'studio' | 'character' | 'decompose' | 'settings'>('generate');
   settingsTab = $state<'providers' | 'matting' | 'agents' | 'system'>('providers');
   studioPendingAsset = $state<AssetItem | null>(null);
   characterPendingAsset = $state<AssetItem | null>(null);
+  decomposePendingAsset = $state<AssetItem | null>(null);
   characterSubMode = $state<'turnaround' | 'outfit' | 'spritesheet' | 'expression'>('turnaround');
   toasts = $state<ToastMessage[]>([]);
   assetsRevision = $state(0);
@@ -29,6 +30,11 @@ class AppStore {
   updateInfo = $state<AppUpdateInfo | null>(null);
   isCheckingUpdate = $state(false);
   closePromptOpen = $state(false);
+  activeMcpBanner = $state<{
+    taskId: string;
+    view: 'generate' | 'studio' | 'character' | 'decompose';
+    label: string;
+  } | null>(null);
 
   notifyAssetsChanged() {
     this.assetsRevision++;
@@ -46,6 +52,11 @@ class AppStore {
     this.characterPendingAsset = asset;
     this.characterSubMode = mode;
     this.activeView = 'character';
+  }
+
+  openInDecompose(asset: AssetItem) {
+    this.decomposePendingAsset = asset;
+    this.activeView = 'decompose';
   }
 
   openSettings(tab: 'providers' | 'matting' | 'agents' | 'system' = 'providers') {
@@ -70,9 +81,9 @@ class AppStore {
     try {
       const [s, ver] = await Promise.all([
         api.getSettings(),
-        getVersion().catch(() => '0.2.1')
+        getVersion().catch(() => '0.3.0')
       ]);
-      this.appVersion = ver || '0.2.1';
+      this.appVersion = ver || '0.3.0';
       this.applySettings(s);
       this.projects = await api.listProjects();
       void this.refreshUpdateCheck(true);
@@ -167,6 +178,16 @@ class AppStore {
 
   async refreshProjects() {
     this.projects = await api.listProjects();
+  }
+
+  async reloadSettingsFromBackend() {
+    try {
+      const [s, proj] = await Promise.all([api.getSettings(), api.listProjects()]);
+      this.applySettings(s);
+      this.projects = proj;
+    } catch {
+      // ignore transient sync error
+    }
   }
 
   async requestClose() {

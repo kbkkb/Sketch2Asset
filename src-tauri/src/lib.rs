@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod decompose;
 pub mod error;
 pub mod library;
 pub mod matting;
@@ -67,8 +68,10 @@ fn save_window_bounds(window: &tauri::Window, path: &Path) {
 
 pub(crate) fn show_main_window(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
-        let _ = win.show();
         let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_always_on_top(true);
+        let _ = win.set_always_on_top(false);
         let _ = win.set_focus();
     }
 }
@@ -77,6 +80,9 @@ pub(crate) fn show_main_window(app: &tauri::AppHandle) {
 pub fn run() {
     matting::preload_startup_runtime_dlls();
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -122,6 +128,7 @@ pub fn run() {
             let _ = pose3d::ensure_seeded_actions(&app_state.app_data_dir);
 
             app.manage(app_state);
+            mcp::bridge::start_desktop_bridge_server(app.handle().clone());
 
             let show_item = MenuItem::with_id(app, "tray_show", "显示主窗口 / Show Window", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "tray_quit", "彻底退出 / Exit", true, None::<&str>)?;
@@ -133,7 +140,11 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app_handle, event| match event.id().as_ref() {
                     "tray_show" => show_main_window(app_handle),
-                    "tray_quit" => app_handle.exit(0),
+                    "tray_quit" => {
+                        let st = app_handle.state::<state::AppState>();
+                        mcp::bridge::cleanup_bridge_file(&st.app_data_dir);
+                        app_handle.exit(0);
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -186,6 +197,7 @@ pub fn run() {
                             let _ = window.hide();
                         }
                         "exit" => {
+                            mcp::bridge::cleanup_bridge_file(&state.app_data_dir);
                             window.app_handle().exit(0);
                         }
                         _ => {
@@ -240,6 +252,23 @@ pub fn run() {
             commands::render_pose_action_grid,
             commands::poll_mcp_pose_request,
             commands::complete_mcp_pose_request,
+            commands::get_decompose_status,
+            commands::pick_decompose_dir,
+            commands::set_decompose_dir,
+            commands::install_decompose_extension,
+            commands::cancel_decompose_install,
+            commands::cancel_decompose_run,
+            commands::cancel_mcp_task,
+            commands::save_decompose_layers,
+            commands::split_decompose_layer,
+            commands::uninstall_decompose_extension,
+            commands::run_decompose_character,
+            commands::list_decompose_history,
+            commands::load_decompose_job,
+            commands::defringe_decompose_layer,
+            commands::export_decompose_psd,
+            commands::export_decompose_bundle,
+            commands::pick_export_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Sketch2Asset application");

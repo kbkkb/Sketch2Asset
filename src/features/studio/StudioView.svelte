@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
     Hand,
     WandSparkles,
@@ -30,6 +31,7 @@
     MessageSquarePlus,
     Trash2,
     X,
+    Square,
     Plus,
     Maximize2,
     Layers
@@ -158,6 +160,12 @@
   // Annotated Region Edit (局部批注修改重绘) state
   let annotations = $state<StudioRegionBox[]>([]);
   let activeAnnotationId = $state<string | null>(null);
+  let unlistenMcp: UnlistenFn | null = null;
+  let mcpStudioTask = $state<{
+    taskId: string;
+    op: 'matting' | 'region_edit';
+    label: string;
+  } | null>(null);
   let draftAnnotRect = $state<CropRect | null>(null);
   let regionEditMode = $state<'visual_guide' | 'mask_edit'>('visual_guide');
   let regionBlendMode = $state<'full' | 'patch'>('full');
@@ -290,6 +298,86 @@
       }
     }
     studioDraftHydrated = true;
+
+    unlistenMcp = await listen<any>('mcp-ui-event', async (ev) => {
+      const p = ev.payload ?? {};
+      if (p.kind === 'studio_started') {
+        const op: 'matting' | 'region_edit' =
+          p.op === 'region_edit' ? 'region_edit' : 'matting';
+        mcpStudioTask = {
+          taskId: p.taskId,
+          op,
+          label:
+            op === 'matting'
+              ? i18n.locale === 'en'
+                ? 'AI Agent removing background...'
+                : 'AI Agent 正在智能抠图...'
+              : i18n.locale === 'en'
+                ? 'AI Agent editing region...'
+                : 'AI Agent 正在局部重绘...'
+        };
+        isMattingBusy = op === 'matting';
+        isRegionEditing = op === 'region_edit';
+        if (p.inputPath) {
+          try {
+            const durl = await api.readImageDataUrl(p.inputPath);
+            await loadFromDataUrl(durl);
+          } catch {
+            // ignore preview load failure
+          }
+        }
+        if (op === 'region_edit' && p.w > 0 && p.h > 0) {
+          const boxId = `mcp_box_${p.taskId}`;
+          annotations = [
+            {
+              id: boxId,
+              index: 1,
+              x: Number(p.x) || 0,
+              y: Number(p.y) || 0,
+              w: Number(p.w),
+              h: Number(p.h),
+              note: String(p.instruction || ''),
+              color: REGION_COLORS[0]!
+            }
+          ];
+          activeAnnotationId = boxId;
+        }
+      } else if (p.kind === 'studio_completed') {
+        isMattingBusy = false;
+        isRegionEditing = false;
+        mcpStudioTask = null;
+        if (p.outputPath) {
+          try {
+            const durl = await api.readImageDataUrl(p.outputPath);
+            await loadFromDataUrl(durl);
+          } catch {
+            // ignore preview load failure
+          }
+        }
+        await refreshFilmstrip();
+        appStore.toast(
+          'ok',
+          i18n.locale === 'en' ? 'MCP Studio operation complete' : 'AI Agent 精修工坊操作完成'
+        );
+      } else if (p.kind === 'studio_cancelled') {
+        isMattingBusy = false;
+        isRegionEditing = false;
+        mcpStudioTask = null;
+        appStore.toast(
+          'info',
+          i18n.locale === 'en' ? 'MCP Studio task cancelled' : '已手动中止 AI Agent 精修任务'
+        );
+      } else if (p.kind === 'studio_failed') {
+        isMattingBusy = false;
+        isRegionEditing = false;
+        mcpStudioTask = null;
+        appStore.toast('err', p.error || 'MCP Studio task failed');
+      }
+    });
+  });
+
+  onDestroy(() => {
+    unlistenMcp?.();
   });
 
   $effect(() => {
@@ -1925,6 +2013,26 @@
           : 'auto'};"
       ></canvas>
 
+      {#if mcpStudioTask}
+        <div
+          class="absolute top-3 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2.5 rounded-full border border-accent/60 bg-ink-1/95 px-3.5 py-1.5 text-xs shadow-2xl backdrop-blur-xl"
+        >
+          <Loader2 size={13} class="animate-spin text-accent" />
+          <span class="rounded bg-accent/20 px-1.5 py-0.5 font-mono text-[10px] font-bold text-accent">
+            MCP
+          </span>
+          <span class="font-semibold text-fg">{mcpStudioTask.label}</span>
+          <button
+            type="button"
+            onclick={() => api.cancelMcpTask(mcpStudioTask!.taskId)}
+            class="flex items-center gap-1 rounded-full border border-err/60 bg-err/15 px-2.5 py-0.5 text-[11px] font-bold text-err hover:bg-err hover:text-white"
+          >
+            <Square size={9} fill="currentColor" />
+            <span>{i18n.locale === 'en' ? 'Stop' : '中止'}</span>
+          </button>
+        </div>
+      {/if}
+
       <!-- Live Brush Circle Overlay -->
       {#if cursorPos.visible && imgWidth > 0}
         <div
@@ -3057,6 +3165,19 @@
         <span>{i18n.t('asset_send_to_spritesheet')}</span>
       </button>
     {/if}
+
+    <button
+      type="button"
+      onclick={() => {
+        const target = contextMenu!.asset;
+        contextMenu = null;
+        appStore.openInDecompose(target);
+      }}
+      class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-fg hover:bg-ink-2 hover:text-accent"
+    >
+      <Layers size={13} />
+      <span>{i18n.locale === 'en' ? 'Send to Layer Split' : '送入拆图工坊'}</span>
+    </button>
 
     <button
       type="button"

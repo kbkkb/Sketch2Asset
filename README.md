@@ -10,26 +10,27 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Release-v0.2.2-84cc16.svg" alt="Version v0.2.2">
+  <img src="https://img.shields.io/badge/Release-v0.3.0-84cc16.svg" alt="Version v0.3.0">
   <img src="https://img.shields.io/badge/Architecture-Tauri_2_%2B_Rust-orange.svg" alt="Tauri 2 + Rust">
   <img src="https://img.shields.io/badge/Frontend-Svelte_5_%2B_Three.js-ff3e00.svg" alt="Svelte 5 + Three.js">
   <img src="https://img.shields.io/badge/Matting-ONNX_DirectML_GPU-10b981.svg" alt="ONNX Runtime DirectML">
-  <img src="https://img.shields.io/badge/Agent-MCP_Server_(11_Tools)-6366f1.svg" alt="MCP Server">
+  <img src="https://img.shields.io/badge/Decompose-2.5D_23+_Layers-ec4899.svg" alt="2.5D Layer Decompose">
+  <img src="https://img.shields.io/badge/Agent-MCP_Server_(13_Tools)-6366f1.svg" alt="MCP Server">
   <img src="https://img.shields.io/badge/Workflow-ComfyUI_Ready-06b6d4.svg" alt="ComfyUI Ready">
   <img src="https://img.shields.io/badge/License-MIT-22c55e.svg" alt="MIT License">
 </p>
 
 ---
 
-## Why Sketch2Asset v0.2.1?
+## Why Sketch2Asset v0.3.0?
 
 General-purpose AI image generators routinely fail at the **"last mile" of game production**:
 - Sweeping sword slashes in sprite sheets breach uniform grid lines and get severed, or airborne jump frames float inside the texture and misalign Unity / Godot colliders;
-- Generated pixel art suffers from anti-aliasing blur and inconsistent sub-pixel "mixels";
-- Transparent PNGs show ugly white halos under bilinear filtering in game engines;
-- Workflows lack native automation bridges to AI Coding Agents (Claude / Cursor / Antigravity) and local ComfyUI pipelines.
+- Flat 2D character illustrations cannot be rigged in Spine / Live2D without manually painting occluded back hair, inner coats, or facial parts layer by layer;
+- Generated pixel art suffers from anti-aliasing blur and inconsistent sub-pixel "mixels", while transparent PNGs show ugly white halos under bilinear filtering;
+- Workflows lack live two-way automation bridges to AI Coding Agents (Claude / Cursor / Antigravity) and local ComfyUI pipelines.
 
-**Sketch2Asset** is built natively with **Tauri 2 + Rust + Svelte 5 + Three.js** with zero Python dependency—combining structured generation, 3D pose guidance, engine-ready sprite sheet calibration, DirectML GPU matting, and an MCP server into a single **Game-Ready** production pipeline.
+**Sketch2Asset** is built natively with **Tauri 2 + Rust + Svelte 5 + Three.js** with zero Python dependency for core asset generation, matting, and 3D posing (plus an optional one-click isolated CUDA extension for 2.5D character layer decomposition)—unifying structured generation, 3D pose guidance, sprite sheet calibration, DirectML GPU matting, 23+ layer PSD decomposition, and a Live Desktop MCP Bridge into one **Game-Ready** production pipeline.
 
 ---
 
@@ -137,21 +138,29 @@ General-purpose AI image generators routinely fail at the **"last mile" of game 
 
 ---
 
-### 4. AI Agent Hub (MCP), ComfyUI & Native Desktop Polish
+### 4. Layer Decompose Workshop — 2.5D Semantic Splitting & Unity 2D Gizmo *(v0.3.0 New)*
+
+- **23+ Occluded Semantic Layers & Layered `.psd`**: Powered by optional isolated **See-Through** (`LayerDiff3D` + `Marigold Depth`) CUDA extension with one-click Python 3.12 runtime provisioning, 8-way parallel mirror downloads (`NF4` 4-bit / `BF16`), and automatic DirectML VRAM handoff.
+- **Unity-Style 2D XY Move Gizmo**: Zoom-invariant red X arrow, green Y arrow, and blue XY free-drag handle, with `Q`/`W` tool switching, `1 / 5 / 20px` arrow-key nudging, Z-order reordering, and baked offsets on `.psd` / bundle export.
+- **Secondary Splitting & 4-Pass Fidelity**: Split any layer Left/Right (`-l`/`-r`) or Depth Front/Back (`-back`/`-front` with occluded band inpainting), defringe halos, recover missing footwear/headwear, calibrate Live2D facial Z-order & skin fidelity, and send any part directly to Canvas Studio.
+- **Smart Hardware Protection**: Auto-skips redundant BiRefNet matting when alpha transparency already exists, adapts Group/CPU Offload to free VRAM, and defaults to `cool_ms: 60` thermal protection across both UI and MCP.
+
+---
+
+### 5. AI Agent Hub (MCP), ComfyUI & Native Desktop Polish
 
 <p align="center">
   <!-- 📷 [Screenshot #4] Settings -> AI Agent Hub or ComfyUI Workflow configuration -->
   <img src="docs/media/settings-mcp-comfyui.png" alt="AI Agent Hub and ComfyUI Settings" width="88%">
 </p>
 
-- **Standalone MCP Server (`sketch2asset-mcp.exe`)** *(v0.2.1 New)*:
-  - Exposes **11 MCP tools** (asset generation, GPU matting, character derivation, reading/editing/rendering `MOD-04` 3D poses via live desktop bridge, region redraw, project management).
-  - **Real-Time Dual Sync**: Settings changes persist immediately for MCP; the frontend polls `library_revision` every 2.5s so MCP-generated assets appear automatically without switching tabs.
-  - **One-Click Setup**: Built-in **AI Agent Hub** in Settings generates and installs `mcpServers` configs for Claude Desktop, Cursor, Antigravity, and more.
-- **Local ComfyUI Workflow Integration** *(v0.2.1 New)*: Connect local ComfyUI endpoints, import custom workflow JSONs, and map Prompt / Size / Batch / Steps / Reference Image nodes.
-- **Native Windows System Tray & Update Checker** *(v0.2.1 New)*: Minimize-to-tray support with configurable close behavior (`ask` / `tray` / `exit`), TitleBar version pill, and accurate SemVer update notifications.
-- **Decompose Workshop (Coming Soon)**: Top-bar placeholder reserved for upcoming transparent layer decomposition.
-- **AppData & DPAPI Security**: Credentials encrypted via Windows DPAPI; all library data and models isolated inside `%AppData%\com.sketch2asset.app`.
+- **Live Desktop MCP Bridge & Async Server (`sketch2asset-mcp.exe`)** *(v0.3.0 Upgraded)*:
+  - Exposes **13 MCP tools** (asset forge, GPU matting, character turnarounds/spritesheets/expressions, live 3D pose editing/rendering, region redraw, project management, plus `s2a_decompose_status` and async-by-default `s2a_decompose_character` so 2.5D decomposition never hits 3-minute MCP timeouts).
+  - **Real-Time UI Synchronization**: Authenticated localhost TCP bridge routes MCP actions straight into the open `Sketch2Asset.exe` window—automatically switching views, showing live progress, and letting users pause or abort Agent tasks directly in the UI.
+  - **One-Click Setup**: Built-in **AI Agent Hub** in Settings generates and installs `mcpServers` configs and updated `SKILL.md` bundles for Claude Desktop, Cursor, Antigravity, OpenCode, and more.
+- **Local ComfyUI Workflow Integration**: Connect local ComfyUI endpoints, import custom workflow JSONs, and map Prompt / Size / Batch / Steps / Reference Image nodes.
+- **Native Windows Desktop Experience**: Single-instance window guard, System Tray minimization (`ask` / `tray` / `exit`), TitleBar update pill, and **in-app lightweight incremental patch updater** (`v0.2.2+`).
+- **AppData & DPAPI Security**: Credentials encrypted via Windows DPAPI; all library data, scoped extension installs, and models isolated cleanly.
 
 ---
 
@@ -190,18 +199,21 @@ sketch2asset/
 │   │   ├── generate/                     # Asset Forge (7 archetypes, prompt matrix, annotations)
 │   │   ├── character/                    # Character Workshop (MOD-01 ~ MOD-04)
 │   │   ├── studio/                       # Canvas Studio (GPU matting, pixel cleaner, wand/brush)
-│   │   └── settings/                     # Settings (Providers, ComfyUI, AI Agent Hub, Tray)
+│   │   ├── decompose/                    # Layer Decompose Workshop (2.5D PSD & 2D XY Gizmo)
+│   │   └── settings/                     # Settings (Providers, ComfyUI, AI Agent Hub, Tray, Updater)
 │   └── lib/
-│       ├── components/                   # TitleBar (version/update/decompose), close dialog
+│       ├── components/                   # TitleBar (version/updater/nav), close dialog, etc.
 │       ├── imaging/                      # Island slicer, foot pivot, pixel cleaner, unmixing
 │       ├── i18n/                         # Reactive ZH/EN dictionary
 │       └── stores/                       # Reactive state & library_revision sync
 ├── src-tauri/                            # Tauri 2 + Rust backend + MCP binary
 │   └── src/
 │       ├── bin/mcp.rs                    # sketch2asset-mcp standalone MCP server
-│       ├── commands/                     # IPC commands & Agent Hub integration
+│       ├── commands/                     # IPC commands, Agent Hub & incremental updater
+│       ├── decompose/                    # Extension installer, 8-way downloader & See-Through worker
 │       ├── library/                      # SQLite 3 (WAL) repository & revision tracking
 │       ├── matting/                      # ONNX Runtime (DirectML) & anti-halo pipeline
+│       ├── mcp/                          # MCP 13-tool executor, TCP desktop bridge & SKILL.md hub
 │       └── providers/                    # OpenAI Images / Chat / ComfyUI clients
 ├── docs/media/                           # README screenshots & demo GIFs
 ├── CHANGELOG.md                          # Version release notes

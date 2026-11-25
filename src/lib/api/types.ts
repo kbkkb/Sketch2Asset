@@ -87,6 +87,10 @@ export interface AppSettings {
   defaultBackground: string;
   defaultSize: string;
   closeBehavior?: 'ask' | 'tray' | 'exit';
+  decomposeExtDir?: string;
+  decomposeBackend?: 'local' | 'comfyui';
+  decomposeQuant?: 'nf4' | 'bf16';
+  decomposeMirror?: 'hf-mirror' | 'huggingface';
 }
 
 export interface ProjectInfo {
@@ -286,4 +290,85 @@ export interface McpPoseBridgeRequest {
   width: number;
   height: number;
   createdAtMs: number;
+}
+
+export interface DecomposeEnvStatus {
+  configuredDir: string;
+  recommendedDir: string;
+  effectiveDir: string;
+  diskFreeGb: number;
+  diskTotalGb: number;
+  hasEnoughDisk: boolean;
+  gpuName: string;
+  vramTotalMb: number;
+  vramFreeMb: number;
+  hasSupportedGpu: boolean;
+  runtimeReady: boolean;
+  repoReady: boolean;
+  modelsReady: boolean;
+  ready: boolean;
+  runtimeEstimatedGb: number;
+  modelsEstimatedGb: number;
+  requiredDiskGb: number;
+  backend: string;
+  quantMode: string;
+  mirror: string;
+}
+
+export interface DecomposeLayerInfo {
+  id: string;
+  name: string;
+  zIndex: number;
+  visible: boolean;
+  opacity: number;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  offsetX?: number;
+  offsetY?: number;
+  imagePath: string;
+  depthPath?: string | null;
+}
+
+export interface DecomposeJobResult {
+  jobId: string;
+  jobDir: string;
+  project: string;
+  sourcePath: string;
+  manifestPath: string;
+  psdPath: string;
+  reconstructionPath: string;
+  width: number;
+  height: number;
+  peakVramGb: number;
+  elapsedSec: number;
+  layers: DecomposeLayerInfo[];
+  assetId?: string | null;
+}
+
+export interface DecomposeHistoryItem {
+  jobId: string;
+  jobDir: string;
+  manifestPath: string;
+  psdPath: string;
+  reconstructionPath: string;
+  width: number;
+  height: number;
+  layerCount: number;
+  createdTs: number;
+}
+
+export interface RunDecomposeOptions {
+  inputPath: string;
+  project?: string;
+  resolution?: number;
+  steps?: number;
+  seed?: number;
+  quantMode?: 'nf4' | 'bf16';
+  tblrSplit?: boolean;
+  autoRemoveBg?: boolean;
+  cpuOffload?: boolean;
+  groupOffload?: 'auto' | 'on' | 'off';
+  coolMs?: number;
 }

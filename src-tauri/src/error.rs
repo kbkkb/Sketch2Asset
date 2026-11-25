@@ -16,6 +16,7 @@ pub enum AppErrorCode {
     ModelMissing,
     Io,
     Database,
+    Cancelled,
     Internal,
 }
 

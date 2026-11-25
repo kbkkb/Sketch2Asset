@@ -27,10 +27,10 @@ export function savePersistedState<T>(key: keyof typeof STORAGE_KEYS, value: T):
   }
 }
 
-export function loadLastActiveView(): 'generate' | 'studio' | 'character' {
+export function loadLastActiveView(): 'generate' | 'studio' | 'character' | 'decompose' {
   try {
     const v = localStorage.getItem(STORAGE_KEYS.activeView);
-    if (v === 'studio' || v === 'character' || v === 'generate') {
+    if (v === 'studio' || v === 'character' || v === 'generate' || v === 'decompose') {
       return v;
     }
   } catch {
@@ -41,7 +41,7 @@ export function loadLastActiveView(): 'generate' | 'studio' | 'character' {
 
 export function saveLastActiveView(view: string): void {
   try {
-    if (view === 'generate' || view === 'studio' || view === 'character') {
+    if (view === 'generate' || view === 'studio' || view === 'character' || view === 'decompose') {
       localStorage.setItem(STORAGE_KEYS.activeView, view);
     }
   } catch {

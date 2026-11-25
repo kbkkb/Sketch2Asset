@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [0.3.0] - 2026-11-25
+
+### ✨ 新增功能 (Added)
+
+- **2.5D 拆图工坊 (Layer Decompose Workshop · See-Through 集成)**
+  - 支持一键在隔离目录中自动配置 Python 3.12 + CUDA 12.8 运行时与 `NF4`（4-bit 量化）/ `BF16` 原生权重（基于 Rust 8 线程 HTTP Range 断点续传与镜像自动切换），将单张角色立绘自动透视补全遮挡区域，拆解为 **23+ 层全画布对齐独立散件 PNG 与标准分层 `.psd`**（开箱适配 Spine / Live2D / Unity `PSD Importer` / Godot）。
+  - **Unity 风格 2D XY 移动手柄 (Move Gizmo) & 快捷键**：支持红轴（X 水平）、绿轴（Y 垂直）及蓝框（XY 自由拖拽）交互定位，缩放不变形手柄、支持 `Q` / `W` 工具切换与 `1 / 5 / 20px` 方向键精确微调，导出 PSD 与散件包时自动烘焙坐标偏移。
+  - **图层二次精拆与精修打通**：支持按连通域/对称轴自动 **左右对称拆分（`-l` / `-r`）**、基于 Marigold 伪深度 KMeans 聚类的 **前后景深二拆（`-back` / `-front` 自动修复背景遮挡带）**、单层 Alpha 边缘收缩去白边（Defringe），以及一键将任意拆层送入「精修工坊」。
+- **MCP 桌面端实时联动桥接 (Desktop Live TCP Bridge) & 异步拆图**
+  - `Sketch2Asset.exe` 内置带 Session Token 鉴权的本地 TCP 桥接服务，工具集扩展至 **13 个 MCP 工具**（新增 `s2a_decompose_status` 与 `s2a_decompose_character`）。当 AI Agent 调用工具时，桌面端前台实时跳转对应工坊、显示正在生成/拆解的进度卡片，并支持用户直接手动暂停或中止任务。
+  - **`s2a_decompose_character` 默认异步执行**：`async_mode: true` 默认毫秒级返回 `taskId`，Agent 通过轮询 `s2a_decompose_status` 读取实时阶段进度与产物路径，彻底摆脱 MCP 3 分钟同步超时限制。
+- **桌面单实例锁 (Single-Instance Guard)**
+  - 集成 `tauri-plugin-single-instance`，重复启动程序时自动唤醒并聚焦已有主窗口，防止多开实例抢占显存与端口冲突。
+
+### 🎨 体验与画质优化 (Changed & Improved)
+
+- **四重拆图后处理保真管线**
+  - **防过度脑补与裙摆前后自动切分**：以原图非透明轮廓约束各层外溢像素（消除双腿镂空处误填色）；检测到外套/裙摆内衬遮挡腿部时自动切分底层 `bottomwear-back` 置于 `legwear` 之下。
+  - **缺失部件自动抢救**：比对原图轮廓与高对比色块，自动找回被模型漏检或截断的靴尖（`footwear`）与头顶发饰/蝴蝶结（`headwear`）。
+  - **Live2D 标准五官排序与头饰校准**：按五官解剖顺序重排面部层次，校准面部肤色并剔除耳鬓残留发丝；自动隐藏幻觉头饰，并在重叠像素更贴近原图时将干净前景头饰提至头发上方。
+  - **无头/非人形立绘平滑降级**：遇到怪物、盔甲、背影等未检出独立人类头部的立绘时，保留全身 13 层语义拆分并跳过五官细化，不再报错中断。
+- **显存自动回收与默认硬件控温护卡**
+  - 当输入立绘已带有效透明通道时自动跳过冗余 BiRefNet 预抠图，并在启动 CUDA 拆图前主动卸载 DirectML 会话回收显存；按可用显存自适应启用 Group Offload / CPU Offload，UI 与 MCP 默认启用 `cool_ms: 60` 步间散热停顿保护显卡。
+- **拆图项目文件夹完整联动**
+  - 底部胶片栏支持切换全部 / 未分类 / 各自定义项目文件夹；读取历史拆图工程及执行二次拆分时持久化并自动恢复 `project` 归属与 `sourcePath`。
+
+### 🛡️ 安全与稳定性修复 (Security & Fixed)
+
+- **安全与目录边界加固**：`uninstall_decompose_extension` 改为受管子项白名单精准清理（仅移除 `.venv`、`models`、`see-through`、`s2a_*.py` 等扩展文件），杜绝用户自定义父目录被连带误删；本地 TCP 桥接新增鉴权前 16 MiB 单行上限与 5s 读取超时；HuggingFace 权重下载清单新增路径穿越清洗（拦截 `..`、盘符及绝对路径）。
+- **并发与边界 Bug 修复**：修复拆图工坊「选择本地图片」上传 `.jpg` / `.webp` 因后缀固定 `.png` 导致解码失败的问题并自动清理 `%TEMP%` 临时文件；统一 UI 手动拆图与 MCP 异步拆图的原子并发锁（`try_start_decompose_tracker`）；修复 `s2a_remove_background` 中止后仍写盘孤儿文件问题；3D 姿态桥接改为事件直推（`pose_render_requested`）消除托盘后台定时器节流延迟；同步更新内置 Agent `SKILL.md` 文档模板。
+
+### English Summary (`v0.3.0`)
+
+- **Added**:
+  - **2.5D Layer Decompose Workshop** (See-Through integration): Isolated Python 3.12 + CUDA 12.8 setup & 8-way parallel Range downloader (`NF4` 4-bit / `BF16`), extracting 23+ occluded/inpainted semantic layers + layered `.psd`, with a **Unity-style 2D XY Move Gizmo** (`Q`/`W` shortcuts, arrow nudging), **L/R & Marigold Depth secondary layer splitting**, single-layer defringe, and direct send-to-studio support.
+  - **Desktop Live MCP Bridge & Async Decompose**: Token-authenticated localhost TCP bridge expanding MCP to **13 tools** (adding `s2a_decompose_status` and async-by-default `s2a_decompose_character`), synchronizing live UI tab switches, progress bars, and user cancel controls; added `tauri-plugin-single-instance`.
+- **Changed & Improved**:
+  - 4-pass decompose post-processing pipeline (silhouette clamp against background fill-in, `bottomwear-back` auto-split, missing `footwear` / `headwear` recovery, Live2D facial Z-order & skin tone calibration, and graceful headless/non-humanoid fallback).
+  - Transparent-input skip for redundant matting, DirectML VRAM release before CUDA launch, adaptive Group/CPU Offload, default `cool_ms: 60` thermal protection across UI & MCP, and full project folder filtering & persistence.
+- **Security & Fixed**:
+  - Scoped extension uninstaller preserving unrelated user files, 16 MiB / 5s pre-auth bounds on the local TCP bridge, HF `rfilename` path-traversal sanitization, JPEG/WebP local upload re-encoding with temp cleanup, atomic UI/MCP decompose tracker locking, cancel checks prior to matting disk writes, event-driven 3D pose bridge wakeup, and updated `SKILL.md` template.
+
+---
+
 ## [0.2.2] - 2026-11-17
 
 ### ✨ 新增功能 (Added)

@@ -82,7 +82,7 @@
             data-tauri-drag-region
             class="rounded border border-line bg-ink-2/90 px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-normal text-fg-muted"
           >
-            v{appStore.appVersion || '0.2.1'}
+            v{appStore.appVersion || '0.3.0'}
           </span>
         </div>
         <div
@@ -193,12 +193,14 @@
         <span>{i18n.t('nav_character')}</span>
       </button>
 
-      <!-- Tab 4: Layer Decompose Workshop (拆图工坊 · 后续更新占位) -->
+      <!-- Tab 4: Layer Decompose Workshop (拆图工坊) -->
       <button
         type="button"
-        title={i18n.t('nav_decompose_soon')}
-        onclick={() => appStore.toast('info', i18n.t('nav_decompose_soon'))}
-        class="group flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-fg-muted transition-all hover:bg-ink-2 hover:text-fg"
+        onclick={() => (appStore.activeView = 'decompose')}
+        class="group flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all {appStore.activeView ===
+        'decompose'
+          ? 'bg-accent text-accent-ink shadow-sm'
+          : 'text-fg-muted hover:bg-ink-2 hover:text-fg'}"
       >
         <svg width="15" height="15" viewBox="0 0 20 20" fill="none" class="shrink-0">
           <!-- Stacked 2.5D Layer Decomposition Plates -->
@@ -226,9 +228,6 @@
           />
         </svg>
         <span>{i18n.t('nav_decompose')}</span>
-        <span class="rounded border border-line bg-ink-0/60 px-1 py-0.2 font-mono text-[9px] font-bold text-fg-subtle">
-          {i18n.t('nav_decompose_soon_badge')}
-        </span>
       </button>
 
       <!-- Tab 5: API & Settings (API 与设置) -->

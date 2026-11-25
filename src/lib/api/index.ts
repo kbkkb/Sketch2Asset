@@ -17,7 +17,12 @@ import type {
   PoseActionClip,
   ProjectInfo,
   RegionEditPayload,
-  RegionEditResponse
+  RegionEditResponse,
+  DecomposeEnvStatus,
+  DecomposeJobResult,
+  DecomposeHistoryItem,
+  DecomposeLayerInfo,
+  RunDecomposeOptions
 } from './types';
 
 function normalizeError(err: unknown): AppError {
@@ -145,5 +150,75 @@ export const api = {
   pollMcpPoseRequest: () =>
     call<McpPoseBridgeRequest | null>('poll_mcp_pose_request'),
   completeMcpPoseRequest: (reqId: string, dataUrl: string) =>
-    call<boolean>('complete_mcp_pose_request', { reqId, dataUrl })
+    call<boolean>('complete_mcp_pose_request', { reqId, dataUrl }),
+  getDecomposeStatus: () => call<DecomposeEnvStatus>('get_decompose_status'),
+  pickDecomposeDir: (initialDir?: string) =>
+    call<string | null>('pick_decompose_dir', { initialDir: initialDir ?? null }),
+  setDecomposeDir: (dirPath: string) =>
+    call<DecomposeEnvStatus>('set_decompose_dir', { dirPath }),
+  installDecomposeExtension: (
+    targetDir: string,
+    quantMode: string,
+    mirror: string,
+    pypiMirror?: string
+  ) =>
+    call<DecomposeEnvStatus>('install_decompose_extension', {
+      targetDir,
+      quantMode,
+      mirror,
+      pypiMirror: pypiMirror ?? null
+    }),
+  cancelDecomposeInstall: () => call<void>('cancel_decompose_install'),
+  cancelDecomposeRun: () => call<void>('cancel_decompose_run'),
+  cancelMcpTask: (taskId: string) => call<boolean>('cancel_mcp_task', { taskId }),
+  uninstallDecomposeExtension: () =>
+    call<DecomposeEnvStatus>('uninstall_decompose_extension'),
+  runDecomposeCharacter: (opts: RunDecomposeOptions) =>
+    call<DecomposeJobResult>('run_decompose_character', { opts }),
+  saveDecomposeLayers: (manifestPath: string, layers: DecomposeLayerInfo[]) =>
+    call<void>('save_decompose_layers', { manifestPath, layers }),
+  splitDecomposeLayer: (
+    manifestPath: string,
+    layers: DecomposeLayerInfo[],
+    layerId: string,
+    mode: 'lr' | 'depth'
+  ) =>
+    call<DecomposeJobResult>('split_decompose_layer', {
+      manifestPath,
+      layers,
+      layerId,
+      mode
+    }),
+  listDecomposeHistory: () =>
+    call<DecomposeHistoryItem[]>('list_decompose_history'),
+  loadDecomposeJob: (manifestPath: string) =>
+    call<DecomposeJobResult>('load_decompose_job', { manifestPath }),
+  defringeDecomposeLayer: (layerImagePath: string, chokePx: number) =>
+    call<string>('defringe_decompose_layer', { layerImagePath, chokePx }),
+  exportDecomposePsd: (
+    manifestPath: string,
+    layers: DecomposeLayerInfo[],
+    outPsdPath?: string,
+    reveal = true
+  ) =>
+    call<string>('export_decompose_psd', {
+      manifestPath,
+      layers,
+      outPsdPath: outPsdPath ?? null,
+      reveal
+    }),
+  exportDecomposeBundle: (
+    manifestPath: string,
+    destDir: string,
+    layers: DecomposeLayerInfo[],
+    reveal = true
+  ) =>
+    call<string>('export_decompose_bundle', {
+      manifestPath,
+      destDir,
+      layers,
+      reveal
+    }),
+  pickExportDir: (initialDir?: string) =>
+    call<string | null>('pick_export_dir', { initialDir: initialDir ?? null })
 };

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -33,6 +34,18 @@ fn default_close_behavior() -> String {
     "ask".to_string()
 }
 
+fn default_decompose_backend() -> String {
+    "local".to_string()
+}
+
+fn default_decompose_quant() -> String {
+    "nf4".to_string()
+}
+
+fn default_decompose_mirror() -> String {
+    "hf-mirror".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -48,6 +61,14 @@ pub struct AppSettings {
     pub default_size: String,
     #[serde(default = "default_close_behavior")]
     pub close_behavior: String, // "ask" | "tray" | "exit"
+    #[serde(default)]
+    pub decompose_ext_dir: String,
+    #[serde(default = "default_decompose_backend")]
+    pub decompose_backend: String, // "local" | "comfyui"
+    #[serde(default = "default_decompose_quant")]
+    pub decompose_quant: String, // "nf4" | "bf16"
+    #[serde(default = "default_decompose_mirror")]
+    pub decompose_mirror: String, // "hf-mirror" | "huggingface"
 }
 
 impl Default for AppSettings {
@@ -75,8 +96,31 @@ impl Default for AppSettings {
             default_background: "white".to_string(),
             default_size: "1024x1024".to_string(),
             close_behavior: default_close_behavior(),
+            decompose_ext_dir: String::new(),
+            decompose_backend: default_decompose_backend(),
+            decompose_quant: default_decompose_quant(),
+            decompose_mirror: default_decompose_mirror(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecomposeJobTracker {
+    pub task_id: String,
+    pub status: String,
+    pub input_path: String,
+    pub project: String,
+    pub resolution: u32,
+    pub steps: u32,
+    pub cool_ms: u32,
+    pub stage: String,
+    pub percent: u32,
+    pub message: String,
+    pub started_at_ms: i64,
+    pub finished_at_ms: Option<i64>,
+    pub error: Option<String>,
+    pub result: Option<crate::decompose::DecomposeJobResult>,
 }
 
 pub struct AppState {
@@ -88,6 +132,12 @@ pub struct AppState {
     pub db: LibraryDb,
     pub matting: std::sync::Arc<MattingEngine>,
     pub http: reqwest::Client,
+    pub mcp_cancel_tokens: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
+    pub decompose_tracker: Mutex<Option<DecomposeJobTracker>>,
+}
+
+pub fn copy_dir_public(src: &Path, dst: &Path) -> std::io::Result<()> {
+    copy_dir_recursive(src, dst)
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -258,6 +308,8 @@ impl AppState {
             db,
             matting,
             http,
+            mcp_cancel_tokens: Mutex::new(HashMap::new()),
+            decompose_tracker: Mutex::new(None),
         };
         state.persist_settings()?;
         Ok(state)
@@ -376,6 +428,110 @@ impl AppState {
         fs::write(&tmp, json)?;
         fs::rename(&tmp, &self.settings_path)?;
         Ok(())
+    }
+
+    pub fn register_mcp_task(&self, task_id: &str) -> tokio::sync::watch::Receiver<bool> {
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        if let Ok(mut guard) = self.mcp_cancel_tokens.lock() {
+            guard.insert(task_id.to_string(), tx);
+        }
+        rx
+    }
+
+    pub fn cancel_mcp_task(&self, task_id: &str) -> bool {
+        let mut hit = false;
+        if let Ok(guard) = self.mcp_cancel_tokens.lock() {
+            if task_id == "__all__" {
+                hit = !guard.is_empty();
+                for tx in guard.values() {
+                    let _ = tx.send(true);
+                }
+            } else if let Some(tx) = guard.get(task_id) {
+                let _ = tx.send(true);
+                hit = true;
+            }
+        }
+        if task_id.starts_with("mcp_decompose_") || task_id == "__all__" {
+            crate::decompose::cancel_decompose_run();
+            hit = true;
+        }
+        hit
+    }
+
+    pub fn cancel_all_decompose_mcp_tasks(&self) {
+        if let Ok(guard) = self.mcp_cancel_tokens.lock() {
+            for (k, tx) in guard.iter() {
+                if k.starts_with("mcp_decompose_") {
+                    let _ = tx.send(true);
+                }
+            }
+        }
+    }
+
+    pub fn unregister_mcp_task(&self, task_id: &str) {
+        if let Ok(mut guard) = self.mcp_cancel_tokens.lock() {
+            guard.remove(task_id);
+        }
+    }
+
+    pub fn set_decompose_tracker(&self, tracker: DecomposeJobTracker) {
+        if let Ok(mut guard) = self.decompose_tracker.lock() {
+            *guard = Some(tracker);
+        }
+    }
+
+    /// Atomically claim the decompose slot if no job is currently `"running"`.
+    pub fn try_start_decompose_tracker(
+        &self,
+        tracker: DecomposeJobTracker,
+    ) -> Result<(), DecomposeJobTracker> {
+        let mut guard = self.decompose_tracker.lock().unwrap();
+        if let Some(ref cur) = *guard {
+            if cur.status == "running" {
+                return Err(cur.clone());
+            }
+        }
+        *guard = Some(tracker);
+        Ok(())
+    }
+
+    pub fn update_decompose_tracker_progress(&self, stage: &str, percent: u32, message: &str) {
+        if let Ok(mut guard) = self.decompose_tracker.lock() {
+            if let Some(ref mut tr) = *guard {
+                if tr.status == "running" {
+                    tr.stage = stage.to_string();
+                    tr.percent = percent;
+                    tr.message = message.to_string();
+                }
+            }
+        }
+    }
+
+    pub fn finish_decompose_tracker(
+        &self,
+        task_id: &str,
+        status: &str,
+        result: Option<crate::decompose::DecomposeJobResult>,
+        error: Option<String>,
+    ) {
+        if let Ok(mut guard) = self.decompose_tracker.lock() {
+            if let Some(ref mut tr) = *guard {
+                if tr.task_id == task_id {
+                    tr.status = status.to_string();
+                    tr.finished_at_ms = Some(chrono::Utc::now().timestamp_millis());
+                    if status == "completed" {
+                        tr.percent = 100;
+                        tr.stage = "done".to_string();
+                    }
+                    tr.result = result;
+                    tr.error = error;
+                }
+            }
+        }
+    }
+
+    pub fn snapshot_decompose_tracker(&self) -> Option<DecomposeJobTracker> {
+        self.decompose_tracker.lock().ok().and_then(|g| g.clone())
     }
 }
 

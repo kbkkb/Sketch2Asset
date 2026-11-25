@@ -25,6 +25,8 @@ export interface ActiveJob {
   errorMsg?: string;
   payload: GeneratePayload;
   uiSnapshot?: JobUiSnapshot;
+  isMcp?: boolean;
+  mcpTaskId?: string;
 }
 
 class JobsStore {
@@ -107,6 +109,60 @@ class JobsStore {
       job.status = 'error';
       job.errorMsg = e?.details ? `${e.message} — ${e.details}` : (e?.message ?? 'Unknown error');
       appStore.toast('err', job.errorMsg!);
+    }
+  }
+
+  startMcpJob(taskId: string, prompt: string, model: string, count = 1) {
+    const existing = this.activeJobs.some((j) => j.id === taskId);
+    if (existing) return;
+    const job: ActiveJob = $state({
+      id: taskId,
+      prompt,
+      model: model || appStore.activeProfile?.apiModel || 'mcp',
+      count,
+      startedAt: performance.now(),
+      elapsedSec: '0.0',
+      status: 'running',
+      isMcp: true,
+      mcpTaskId: taskId,
+      payload: {
+        profileId: appStore.activeProfile?.id ?? '',
+        model: model || appStore.activeProfile?.apiModel || '',
+        prompt,
+        archetype: 'item_icon',
+        archetypePrompt: '',
+        stylePrompt: '',
+        projectStylePrompt: '',
+        backgroundPrompt: '',
+        negativePrompt: '',
+        size: '1024x1024',
+        project: appStore.settings?.activeProject ?? '',
+        count
+      }
+    });
+    this.activeJobs = [job, ...this.activeJobs];
+  }
+
+  completeMcpJob(taskId: string, asset?: AssetItem) {
+    this.activeJobs = this.activeJobs.filter((j) => j.id !== taskId);
+    if (asset) {
+      this.assets = [asset, ...this.assets.filter((a) => a.id !== asset.id)];
+    }
+    appStore.notifyAssetsChanged();
+    void appStore.refreshProjects();
+  }
+
+  cancelMcpJob(taskId: string) {
+    this.activeJobs = this.activeJobs.filter((j) => j.id !== taskId);
+  }
+
+  failMcpJob(taskId: string, errorMsg: string) {
+    const target = this.activeJobs.find((j) => j.id === taskId);
+    if (target) {
+      target.status = 'error';
+      target.errorMsg = errorMsg;
+    } else {
+      appStore.toast('err', errorMsg);
     }
   }
 

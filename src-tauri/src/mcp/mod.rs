@@ -1,9 +1,11 @@
+pub mod bridge;
 pub mod installer;
 
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use tauri::{Emitter, Manager};
 
 use crate::commands::{
     assemble_game_asset_prompt, fit_image_to_target_size, resolve_sketch_input,
@@ -675,7 +677,11 @@ async fn exec_generate_asset(state: &AppState, args: &Value) -> AppResult<Value>
     }))
 }
 
-async fn exec_remove_background(state: &AppState, args: &Value) -> AppResult<Value> {
+fn exec_remove_background_sync(
+    state: &AppState,
+    args: &Value,
+    cancel_rx: Option<&tokio::sync::watch::Receiver<bool>>,
+) -> AppResult<Value> {
     let input_path = args
         .get("input_path")
         .and_then(|v| v.as_str())
@@ -703,6 +709,12 @@ async fn exec_remove_background(state: &AppState, args: &Value) -> AppResult<Val
     let (rgba, provider_info) = state
         .matting
         .run_matting(&dyn_img, model_id, device, enhanced, choke)?;
+    if cancel_rx.map(|rx| *rx.borrow()).unwrap_or(false) {
+        return Err(AppError::new(
+            AppErrorCode::Cancelled,
+            "Matting task cancelled by user in Sketch2Asset UI",
+        ));
+    }
     let (width, height) = rgba.dimensions();
 
     let mut png_buf = io::Cursor::new(Vec::new());
@@ -723,6 +735,12 @@ async fn exec_remove_background(state: &AppState, args: &Value) -> AppResult<Val
         p.with_file_name(format!("{}_nobg.png", stem))
     };
 
+    if cancel_rx.map(|rx| *rx.borrow()).unwrap_or(false) {
+        return Err(AppError::new(
+            AppErrorCode::Cancelled,
+            "Matting task cancelled by user in Sketch2Asset UI",
+        ));
+    }
     if let Some(parent) = output_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -735,6 +753,10 @@ async fn exec_remove_background(state: &AppState, args: &Value) -> AppResult<Val
         "height": height,
         "providerInfo": provider_info
     }))
+}
+
+async fn exec_remove_background(state: &AppState, args: &Value) -> AppResult<Value> {
+    exec_remove_background_sync(state, args, None)
 }
 
 fn resolve_mcp_background_prompt(archetype: &str, auto_remove_bg: bool) -> &'static str {
@@ -912,15 +934,19 @@ async fn exec_generate_character(state: &AppState, args: &Value) -> AppResult<Va
                     if let Some(wt) = args.get("weapon_type").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
                         clip.proportion.weapon_type = wt.trim().to_string();
                     }
-                    if let Ok((png_bytes, _via_renderer)) =
+                    let app_data_clone = state.app_data_dir.clone();
+                    let clip_render = clip.clone();
+                    if let Ok(Ok((png_bytes, _via_renderer))) = tokio::task::spawn_blocking(move || {
                         crate::pose3d::render_pose_via_bridge_or_fallback(
-                            &state.app_data_dir,
-                            &clip,
+                            &app_data_clone,
+                            &clip_render,
                             rows,
                             cols,
                             tw,
                             th,
                         )
+                    })
+                    .await
                     {
                         let guide_dir = state.app_data_dir.join("pose3d_bridge");
                         let _ = fs::create_dir_all(&guide_dir);
@@ -1101,7 +1127,11 @@ async fn exec_edit_action(state: &AppState, args: &Value) -> AppResult<Value> {
     }))
 }
 
-async fn exec_render_3d_pose(state: &AppState, args: &Value) -> AppResult<Value> {
+async fn exec_render_3d_pose(
+    state: &AppState,
+    args: &Value,
+    app: Option<&tauri::AppHandle>,
+) -> AppResult<Value> {
     let action_id = args
         .get("action_id")
         .and_then(|v| v.as_str())
@@ -1150,14 +1180,33 @@ async fn exec_render_3d_pose(state: &AppState, args: &Value) -> AppResult<Value>
         .unwrap_or(1024)
         .clamp(256, 4096);
 
-    let (png_bytes, renderer_via) = crate::pose3d::render_pose_via_bridge_or_fallback(
-        &state.app_data_dir,
-        &clip,
-        rows,
-        cols,
-        width,
-        height,
-    )?;
+    let app_data_clone = state.app_data_dir.clone();
+    let clip_render = clip.clone();
+    let app_cloned = app.cloned();
+    let (png_bytes, renderer_via) = tokio::task::spawn_blocking(move || {
+        crate::pose3d::render_pose_via_bridge_or_fallback_with_notify(
+            &app_data_clone,
+            &clip_render,
+            rows,
+            cols,
+            width,
+            height,
+            app_cloned.as_ref().map(|h| {
+                let handle = h.clone();
+                move |req_id: &str| {
+                    emit_mcp_ui(
+                        &handle,
+                        json!({
+                            "kind": "pose_render_requested",
+                            "reqId": req_id,
+                        }),
+                    );
+                }
+            }),
+        )
+    })
+    .await
+    .map_err(|e| AppError::new(AppErrorCode::Internal, format!("Pose render task panicked: {}", e)))??;
 
     let out_path = if let Some(custom) = args
         .get("output_path")
@@ -1336,6 +1385,29 @@ async fn exec_edit_region(state: &AppState, args: &Value) -> AppResult<Value> {
         "outputPath": output_path.to_string_lossy().replace('\\', "/"),
         "via": via
     }))
+}
+
+async fn exec_decompose_status(state: &AppState) -> AppResult<Value> {
+    state.reload_settings_from_disk();
+    let status = crate::decompose::get_decompose_env_status(state);
+    let mut out = serde_json::to_value(status).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = out.as_object_mut() {
+        let active_val = if let Some(tr) = state.snapshot_decompose_tracker() {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let end_ms = tr.finished_at_ms.unwrap_or(now_ms);
+            let elapsed_sec =
+                (((end_ms - tr.started_at_ms).max(0) as f64) / 100.0).round() / 10.0;
+            let mut tv = serde_json::to_value(&tr).unwrap_or(Value::Null);
+            if let Some(tobj) = tv.as_object_mut() {
+                tobj.insert("elapsedSec".to_string(), json!(elapsed_sec));
+            }
+            tv
+        } else {
+            Value::Null
+        };
+        obj.insert("activeJob".to_string(), active_val);
+    }
+    Ok(out)
 }
 
 fn mcp_tools_schema() -> Value {
@@ -1531,13 +1603,782 @@ fn mcp_tools_schema() -> Value {
                         "limit": { "type": "integer" }
                     }
                 }
+            },
+            {
+                "name": "s2a_decompose_status",
+                "description": "Inspect local Layer Decompose Workshop (See-Through) readiness, GPU/VRAM info, extension folder, disk free space, model availability, plus activeJob live progress and completed result for async s2a_decompose_character tasks.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "s2a_decompose_character",
+                "description": "Decompose a single 2D character portrait into up to 23 occluded/inpainted semantic layers (front hair, back hair, face, eyes, topwear, etc.) plus a depth-sorted layered PSD and PNG parts. Asynchronous by default (async_mode: true) to prevent 3-minute MCP timeouts: returns taskId immediately, then poll s2a_decompose_status until activeJob.status is 'completed', 'cancelled', or 'failed'.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "input_path": { "type": "string", "description": "Absolute path to source character portrait PNG/JPG" },
+                        "project": { "type": "string", "description": "Optional Sketch2Asset project folder name" },
+                        "resolution": { "type": "integer", "description": "Inference resolution (896 fast, 1024 balanced default, 1280 high)" },
+                        "steps": { "type": "integer", "description": "Diffusion steps (16..30, default 20)" },
+                        "seed": { "type": "integer", "description": "Random seed (default 42)" },
+                        "quant_mode": { "type": "string", "enum": ["nf4", "bf16"], "description": "Quantization profile (default nf4 ~6.7GB VRAM)" },
+                        "tblr_split": { "type": "boolean", "description": "Split paired parts into left/right components (default true)" },
+                        "auto_remove_bg": { "type": "boolean", "description": "Auto remove opaque solid background via BiRefNet before decomposing (default true; fast-skips BiRefNet automatically when image already has transparent alpha)" },
+                        "cpu_offload": { "type": "boolean", "description": "Enable accelerate CPU offload for <8GB VRAM GPUs" },
+                        "group_offload": { "type": "string", "enum": ["auto", "on", "off"], "description": "Group offload mode to prevent Windows shared-memory paging (default auto)" },
+                        "cool_ms": { "type": "integer", "description": "Thermal cool-down sleep in ms per diffusion step (0..500, default 60 enabled for GPU protection; set 0 to disable)" },
+                        "async_mode": { "type": "boolean", "description": "Default true: start decomposition asynchronously in Sketch2Asset desktop and return immediately with taskId (prevents 3-minute MCP timeout). Poll s2a_decompose_status for live progress and final layers/PSD result. Set false only if you explicitly want a blocking call." }
+                    },
+                    "required": ["input_path"]
+                }
             }
         ]
     })
 }
 
+fn emit_mcp_ui(app: &tauri::AppHandle, payload: Value) {
+    let _ = app.emit("mcp-ui-event", payload);
+}
+
+fn resolve_tool_model(state: &AppState, args: &Value) -> String {
+    let settings = state.settings.lock().unwrap();
+    let profile_query = args
+        .get("profile_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(&settings.active_profile_id);
+
+    let prof = settings.profiles.iter().find(|p| {
+        p.id.eq_ignore_ascii_case(profile_query)
+            || p.name.eq_ignore_ascii_case(profile_query)
+            || p.name
+                .to_lowercase()
+                .contains(&profile_query.to_lowercase())
+    });
+
+    if let Some(explicit) = args
+        .get("model")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+    {
+        return explicit.to_string();
+    }
+
+    if let Some(p) = prof {
+        if !p.api_model.trim().is_empty() {
+            return p.api_model.clone();
+        }
+        return p.models.first().cloned().unwrap_or_default();
+    }
+    String::new()
+}
+
+pub async fn execute_tool_with_desktop(
+    app: &tauri::AppHandle,
+    tool_name: &str,
+    args: &Value,
+    task_id: &str,
+    mut cancel_rx: tokio::sync::watch::Receiver<bool>,
+) -> AppResult<Value> {
+    let state = app.state::<AppState>();
+    state.reload_settings_from_disk();
+
+    match tool_name {
+        "s2a_status" => {
+            let mut val = exec_status(&state).await?;
+            if let Some(obj) = val.as_object_mut() {
+                obj.insert("desktopBridgeConnected".to_string(), Value::Bool(true));
+            }
+            Ok(val)
+        }
+        "s2a_decompose_status" => exec_decompose_status(&state).await,
+        "s2a_list_assets" => exec_list_assets(&state, args).await,
+        "s2a_list_actions" => exec_list_actions(&state).await,
+        "s2a_create_project" => {
+            let val = exec_create_project(&state, args).await?;
+            let pname = val
+                .get("project")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            emit_mcp_ui(
+                app,
+                json!({
+                    "kind": "settings_synced",
+                    "toast": format!("AI Agent 已创建/更新项目：{}", pname),
+                }),
+            );
+            Ok(val)
+        }
+        "s2a_switch_profile" => {
+            let val = exec_switch_profile(&state, args).await?;
+            emit_mcp_ui(
+                app,
+                json!({
+                    "kind": "settings_synced",
+                    "toast": "AI Agent 已切换模型/项目配置",
+                }),
+            );
+            Ok(val)
+        }
+        "s2a_generate_asset" => {
+            let prompt = args
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let archetype = args
+                .get("archetype")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("item_icon")
+                .to_string();
+            let size = args
+                .get("size")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("1024x1024")
+                .to_string();
+            let resolved_model = resolve_tool_model(&state, args);
+
+            let explicit_proj = args
+                .get("project")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+            let target_proj = if let Some(ref ep) = explicit_proj {
+                let mut switched = false;
+                {
+                    let mut guard = state.settings.lock().unwrap();
+                    if guard.active_project != *ep {
+                        guard.active_project = ep.clone();
+                        switched = true;
+                    }
+                }
+                if switched {
+                    let _ = state.persist_settings();
+                    emit_mcp_ui(app, json!({ "kind": "settings_synced" }));
+                }
+                ep.clone()
+            } else {
+                state.settings.lock().unwrap().active_project.clone()
+            };
+
+            emit_mcp_ui(
+                app,
+                json!({
+                    "kind": "generate_started",
+                    "taskId": task_id,
+                    "prompt": prompt,
+                    "model": resolved_model,
+                    "archetype": archetype,
+                    "size": size,
+                    "project": target_proj,
+                }),
+            );
+
+            let res = tokio::select! {
+                r = exec_generate_asset(&state, args) => r,
+                _ = cancel_rx.changed() => {
+                    emit_mcp_ui(app, json!({
+                        "kind": "generate_cancelled",
+                        "taskId": task_id,
+                    }));
+                    return Err(AppError::new(
+                        AppErrorCode::Cancelled,
+                        "Task cancelled by user in Sketch2Asset UI",
+                    ));
+                }
+            };
+
+            match res {
+                Ok(val) => {
+                    emit_mcp_ui(
+                        app,
+                        json!({
+                            "kind": "generate_completed",
+                            "taskId": task_id,
+                            "asset": val.get("asset").cloned(),
+                        }),
+                    );
+                    Ok(val)
+                }
+                Err(e) => {
+                    emit_mcp_ui(
+                        app,
+                        json!({
+                            "kind": "generate_failed",
+                            "taskId": task_id,
+                            "error": e.message,
+                        }),
+                    );
+                    Err(e)
+                }
+            }
+        }
+        "s2a_generate_character" => {
+            let sub_mode = args
+                .get("sub_mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("spritesheet")
+                .to_string();
+            let prompt = args
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let rows = args.get("rows").and_then(|v| v.as_u64());
+            let cols = args.get("cols").and_then(|v| v.as_u64());
+            let anchor_path = args
+                .get("anchor_image_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let action_id = args
+                .get("action_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let resolved_model = resolve_tool_model(&state, args);
+
+            emit_mcp_ui(
+                app,
+                json!({
+                    "kind": "character_started",
+                    "taskId": task_id,
+                    "subMode": sub_mode,
+                    "prompt": prompt,
+                    "model": resolved_model,
+                    "rows": rows,
+                    "cols": cols,
+                    "anchorPath": anchor_path,
+                    "actionId": action_id,
+                }),
+            );
+
+            let res = tokio::select! {
+                r = exec_generate_character(&state, args) => r,
+                _ = cancel_rx.changed() => {
+                    emit_mcp_ui(app, json!({
+                        "kind": "character_cancelled",
+                        "taskId": task_id,
+                    }));
+                    return Err(AppError::new(
+                        AppErrorCode::Cancelled,
+                        "Character task cancelled by user in Sketch2Asset UI",
+                    ));
+                }
+            };
+
+            match res {
+                Ok(val) => {
+                    emit_mcp_ui(
+                        app,
+                        json!({
+                            "kind": "character_completed",
+                            "taskId": task_id,
+                            "subMode": sub_mode,
+                            "asset": val.get("asset").cloned(),
+                            "poseGuidePath": val.get("poseGuidePath").cloned(),
+                        }),
+                    );
+                    Ok(val)
+                }
+                Err(e) => {
+                    emit_mcp_ui(
+                        app,
+                        json!({
+                            "kind": "character_failed",
+                            "taskId": task_id,
+                            "error": e.message,
+                        }),
+                    );
+                    Err(e)
+                }
+            }
+        }
+        "s2a_remove_background" => {
+            let input_path = args
+                .get("input_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let model_id = args
+                .get("model_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("birefnet")
+                .to_string();
+
+            emit_mcp_ui(
+                app,
+                json!({
+                    "kind": "studio_started",
+                    "taskId": task_id,
+                    "op": "matting",
+                    "inputPath": input_path,
+                    "modelId": model_id,
+                }),
+            );
+
+            let app_clone = app.clone();
+            let args_clone = args.clone();
+            let cancel_bg = cancel_rx.clone();
+            let mut join = tokio::task::spawn_blocking(move || {
+                let st = app_clone.state::<AppState>();
+                exec_remove_background_sync(st.inner(), &args_clone, Some(&cancel_bg))
+            });
+
+            let res = tokio::select! {
+                joined = &mut join => {
+                    joined.unwrap_or_else(|e| Err(AppError::new(AppErrorCode::Internal, e.to_string())))
+                }
+                _ = cancel_rx.changed() => {
+                    emit_mcp_ui(app, json!({
+                        "kind": "studio_cancelled",
+                        "taskId": task_id,
+                        "op": "matting",
+                    }));
+                    return Err(AppError::new(
+                        AppErrorCode::Cancelled,
+                        "Matting task cancelled by user in Sketch2Asset UI",
+                    ));
+                }
+            };
+
+            match res {
+                Ok(val) => {
+                    emit_mcp_ui(
+                        app,
+                        json!({
+                            "kind": "studio_completed",
+                            "taskId": task_id,
+                            "op": "matting",
+                            "outputPath": val.get("outputPath").cloned(),
+                        }),
+                    );
+                    Ok(val)
+                }
+                Err(e) => {
+                    emit_mcp_ui(
+                        app,
+                        json!({
+                            "kind": "studio_failed",
+                            "taskId": task_id,
+                            "op": "matting",
+                            "error": e.message,
+                        }),
+                    );
+                    Err(e)
+                }
+            }
+        }
+        "s2a_edit_region" => {
+            let input_path = args
+                .get("input_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let instruction = args
+                .get("instruction")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let x = args.get("x").and_then(|v| v.as_i64()).unwrap_or(0);
+            let y = args.get("y").and_then(|v| v.as_i64()).unwrap_or(0);
+            let w = args.get("w").and_then(|v| v.as_i64()).unwrap_or(256);
+            let h = args.get("h").and_then(|v| v.as_i64()).unwrap_or(256);
+
+            emit_mcp_ui(
+                app,
+                json!({
+                    "kind": "studio_started",
+                    "taskId": task_id,
+                    "op": "region_edit",
+                    "inputPath": input_path,
+                    "x": x,
+                    "y": y,
+                    "w": w,
+                    "h": h,
+                    "instruction": instruction,
+                }),
+            );
+
+            let res = tokio::select! {
+                r = exec_edit_region(&state, args) => r,
+                _ = cancel_rx.changed() => {
+                    emit_mcp_ui(app, json!({
+                        "kind": "studio_cancelled",
+                        "taskId": task_id,
+                        "op": "region_edit",
+                    }));
+                    return Err(AppError::new(
+                        AppErrorCode::Cancelled,
+                        "Region edit cancelled by user in Sketch2Asset UI",
+                    ));
+                }
+            };
+
+            match res {
+                Ok(val) => {
+                    emit_mcp_ui(
+                        app,
+                        json!({
+                            "kind": "studio_completed",
+                            "taskId": task_id,
+                            "op": "region_edit",
+                            "outputPath": val.get("outputPath").cloned(),
+                        }),
+                    );
+                    Ok(val)
+                }
+                Err(e) => {
+                    emit_mcp_ui(
+                        app,
+                        json!({
+                            "kind": "studio_failed",
+                            "taskId": task_id,
+                            "op": "region_edit",
+                            "error": e.message,
+                        }),
+                    );
+                    Err(e)
+                }
+            }
+        }
+        "s2a_decompose_character" => {
+            let input_path = args
+                .get("input_path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| AppError::new(AppErrorCode::InvalidInput, "input_path is required"))?
+                .to_string();
+
+            if !Path::new(&input_path).is_file() {
+                return Err(AppError::new(
+                    AppErrorCode::NotFound,
+                    format!("输入图像不存在: {}", input_path),
+                ));
+            }
+            let env_status = crate::decompose::get_decompose_env_status(&state);
+            if !env_status.ready {
+                return Err(AppError::new(
+                    AppErrorCode::InvalidInput,
+                    "拆图扩展尚未安装就绪，请先在「拆图工坊」配置目录并完成扩展与权重下载",
+                ));
+            }
+
+            let resolution = args
+                .get("resolution")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as u32);
+            let steps = args
+                .get("steps")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as u32);
+            let group_offload_str = args
+                .get("group_offload")
+                .and_then(|v| v.as_str())
+                .unwrap_or("auto")
+                .to_string();
+            let cool_ms_opt = Some(
+                args.get("cool_ms")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| (n as u32).min(500))
+                    .unwrap_or(60),
+            );
+            let async_mode = args
+                .get("async_mode")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+
+            let res_val = resolution.unwrap_or(1024).clamp(768, 1536);
+            let steps_val = steps.unwrap_or(20).clamp(10, 50);
+            let cool_val = cool_ms_opt.unwrap_or(60);
+            let active_proj = args
+                .get("project")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| state.settings.lock().unwrap().active_project.clone());
+
+            let opts = crate::decompose::RunDecomposeOptions {
+                input_path: input_path.clone(),
+                project: args
+                    .get("project")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                resolution,
+                steps,
+                seed: args.get("seed").and_then(|v| v.as_u64()),
+                quant_mode: args
+                    .get("quant_mode")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                tblr_split: args.get("tblr_split").and_then(|v| v.as_bool()),
+                auto_remove_bg: args.get("auto_remove_bg").and_then(|v| v.as_bool()),
+                cpu_offload: args.get("cpu_offload").and_then(|v| v.as_bool()),
+                group_offload: Some(group_offload_str.clone()),
+                cool_ms: cool_ms_opt,
+            };
+
+            let claim_id = if async_mode {
+                let uid = uuid::Uuid::new_v4().simple().to_string();
+                format!("mcp_decompose_{}", &uid[..8])
+            } else {
+                task_id.to_string()
+            };
+
+            if let Err(cur) = state.try_start_decompose_tracker(crate::state::DecomposeJobTracker {
+                task_id: claim_id.clone(),
+                status: "running".to_string(),
+                input_path: input_path.clone(),
+                project: active_proj.clone(),
+                resolution: res_val,
+                steps: steps_val,
+                cool_ms: cool_val,
+                stage: "prepare".to_string(),
+                percent: 1,
+                message: if async_mode {
+                    "正在初始化异步拆图任务...".to_string()
+                } else {
+                    "正在初始化拆图任务...".to_string()
+                },
+                started_at_ms: chrono::Utc::now().timestamp_millis(),
+                finished_at_ms: None,
+                error: None,
+                result: None,
+            }) {
+                let mut cur_val = serde_json::to_value(&cur).unwrap_or(Value::Null);
+                if let Some(tobj) = cur_val.as_object_mut() {
+                    let elapsed = (((chrono::Utc::now().timestamp_millis() - cur.started_at_ms).max(0) as f64) / 100.0).round() / 10.0;
+                    tobj.insert("elapsedSec".to_string(), json!(elapsed));
+                }
+                return Ok(json!({
+                    "accepted": false,
+                    "status": "already_running",
+                    "activeJob": cur_val,
+                    "pollTool": "s2a_decompose_status",
+                    "message": "Another decompose job is already running. Poll s2a_decompose_status to inspect progress."
+                }));
+            }
+
+            if async_mode {
+                let bg_task_id = claim_id;
+                let mut bg_cancel_rx = state.register_mcp_task(&bg_task_id);
+
+                emit_mcp_ui(
+                    app,
+                    json!({
+                        "kind": "decompose_started",
+                        "taskId": bg_task_id,
+                        "inputPath": input_path,
+                        "resolution": res_val,
+                        "steps": steps_val,
+                    }),
+                );
+
+                let app_bg = app.clone();
+                let bg_id_clone = bg_task_id.clone();
+                tokio::spawn(async move {
+                    let app_worker = app_bg.clone();
+                    let mut join = tokio::task::spawn_blocking(move || {
+                        let st = app_worker.state::<AppState>();
+                        crate::decompose::run_decompose_blocking(Some(&app_worker), st.inner(), opts)
+                    });
+
+                    let res = tokio::select! {
+                        joined = &mut join => {
+                            joined.unwrap_or_else(|e| Err(AppError::new(AppErrorCode::Internal, format!("Decompose task panicked: {}", e))))
+                        }
+                        _ = bg_cancel_rx.changed() => {
+                            crate::decompose::cancel_decompose_run();
+                            let st = app_bg.state::<AppState>();
+                            st.finish_decompose_tracker(&bg_id_clone, "cancelled", None, Some("Decompose cancelled by user".to_string()));
+                            emit_mcp_ui(&app_bg, json!({
+                                "kind": "decompose_cancelled",
+                                "taskId": bg_id_clone,
+                            }));
+                            st.unregister_mcp_task(&bg_id_clone);
+                            return;
+                        }
+                    };
+
+                    let st = app_bg.state::<AppState>();
+                    match res {
+                        Ok(job) => {
+                            st.finish_decompose_tracker(&bg_id_clone, "completed", Some(job.clone()), None);
+                            let job_val = serde_json::to_value(&job).unwrap_or_default();
+                            emit_mcp_ui(
+                                &app_bg,
+                                json!({
+                                    "kind": "decompose_completed",
+                                    "taskId": bg_id_clone,
+                                    "job": job_val,
+                                }),
+                            );
+                        }
+                        Err(e) => {
+                            let msg_lower = e.message.to_lowercase();
+                            if msg_lower.contains("cancel") || e.message.contains("中止") {
+                                st.finish_decompose_tracker(&bg_id_clone, "cancelled", None, Some(e.message));
+                                emit_mcp_ui(
+                                    &app_bg,
+                                    json!({
+                                        "kind": "decompose_cancelled",
+                                        "taskId": bg_id_clone,
+                                    }),
+                                );
+                            } else {
+                                st.finish_decompose_tracker(&bg_id_clone, "failed", None, Some(e.message.clone()));
+                                emit_mcp_ui(
+                                    &app_bg,
+                                    json!({
+                                        "kind": "decompose_failed",
+                                        "taskId": bg_id_clone,
+                                        "error": e.message,
+                                    }),
+                                );
+                            }
+                        }
+                    }
+                    st.unregister_mcp_task(&bg_id_clone);
+                });
+
+                return Ok(json!({
+                    "accepted": true,
+                    "async": true,
+                    "status": "running",
+                    "taskId": bg_task_id,
+                    "inputPath": input_path,
+                    "resolution": res_val,
+                    "steps": steps_val,
+                    "coolMs": cool_val,
+                    "groupOffload": group_offload_str,
+                    "pollTool": "s2a_decompose_status",
+                    "message": format!("Decompose job started asynchronously in Sketch2Asset desktop with thermal cool protection (cool_ms={}). Call s2a_decompose_status periodically until activeJob.status is 'completed', 'cancelled', or 'failed'.", cool_val)
+                }));
+            }
+
+            emit_mcp_ui(
+                app,
+                json!({
+                    "kind": "decompose_started",
+                    "taskId": task_id,
+                    "inputPath": input_path,
+                    "resolution": res_val,
+                    "steps": steps_val,
+                }),
+            );
+
+            let app_clone = app.clone();
+            let mut join = tokio::task::spawn_blocking(move || {
+                let st = app_clone.state::<AppState>();
+                crate::decompose::run_decompose_blocking(Some(&app_clone), st.inner(), opts)
+            });
+
+            let res = tokio::select! {
+                joined = &mut join => {
+                    joined.unwrap_or_else(|e| Err(AppError::new(AppErrorCode::Internal, format!("Decompose task panicked: {}", e))))
+                }
+                _ = cancel_rx.changed() => {
+                    crate::decompose::cancel_decompose_run();
+                    state.finish_decompose_tracker(task_id, "cancelled", None, Some("Decompose cancelled by user".to_string()));
+                    emit_mcp_ui(app, json!({
+                        "kind": "decompose_cancelled",
+                        "taskId": task_id,
+                    }));
+                    return Err(AppError::new(
+                        AppErrorCode::Cancelled,
+                        "Decompose cancelled by user in Sketch2Asset UI",
+                    ));
+                }
+            };
+
+            match res {
+                Ok(job) => {
+                    state.finish_decompose_tracker(task_id, "completed", Some(job.clone()), None);
+                    let job_val = serde_json::to_value(&job).unwrap_or_default();
+                    emit_mcp_ui(
+                        app,
+                        json!({
+                            "kind": "decompose_completed",
+                            "taskId": task_id,
+                            "job": job_val.clone(),
+                        }),
+                    );
+                    Ok(job_val)
+                }
+                Err(e) => {
+                    let msg_lower = e.message.to_lowercase();
+                    if msg_lower.contains("cancel") || e.message.contains("中止") {
+                        state.finish_decompose_tracker(task_id, "cancelled", None, Some(e.message.clone()));
+                        emit_mcp_ui(
+                            app,
+                            json!({
+                                "kind": "decompose_cancelled",
+                                "taskId": task_id,
+                            }),
+                        );
+                    } else {
+                        state.finish_decompose_tracker(task_id, "failed", None, Some(e.message.clone()));
+                        emit_mcp_ui(
+                            app,
+                            json!({
+                                "kind": "decompose_failed",
+                                "taskId": task_id,
+                                "error": e.message,
+                            }),
+                        );
+                    }
+                    Err(e)
+                }
+            }
+        }
+        "s2a_edit_action" => {
+            let val = exec_edit_action(&state, args).await?;
+            emit_mcp_ui(
+                app,
+                json!({
+                    "kind": "pose_updated",
+                    "actionId": args.get("action_id").cloned(),
+                }),
+            );
+            Ok(val)
+        }
+        "s2a_render_3d_pose" => {
+            let val = exec_render_3d_pose(&state, args, Some(app)).await?;
+            emit_mcp_ui(
+                app,
+                json!({
+                    "kind": "pose_updated",
+                    "actionId": val.get("actionId").cloned(),
+                    "posePath": val.get("filePath").cloned(),
+                }),
+            );
+            Ok(val)
+        }
+        _ => Err(AppError::new(
+            AppErrorCode::NotFound,
+            format!("Unknown tool: {}", tool_name),
+        )),
+    }
+}
+
 pub async fn run_mcp_stdio_loop() -> AppResult<()> {
-    let state = init_standalone_state()?;
+    let app_data_dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("com.sketch2asset.app");
     let stdin = io::stdin();
     let mut stdout = io::stdout();
 
@@ -1592,27 +2433,10 @@ pub async fn run_mcp_stdio_loop() -> AppResult<()> {
                 "result": mcp_tools_schema()
             }),
             "tools/call" => {
-                state.reload_settings_from_disk();
                 let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
 
-                let res = match tool_name {
-                    "s2a_status" => exec_status(&state).await,
-                    "s2a_create_project" => exec_create_project(&state, &args).await,
-                    "s2a_switch_profile" => exec_switch_profile(&state, &args).await,
-                    "s2a_generate_asset" => exec_generate_asset(&state, &args).await,
-                    "s2a_remove_background" => exec_remove_background(&state, &args).await,
-                    "s2a_generate_character" => exec_generate_character(&state, &args).await,
-                    "s2a_list_actions" => exec_list_actions(&state).await,
-                    "s2a_edit_action" => exec_edit_action(&state, &args).await,
-                    "s2a_render_3d_pose" => exec_render_3d_pose(&state, &args).await,
-                    "s2a_edit_region" => exec_edit_region(&state, &args).await,
-                    "s2a_list_assets" => exec_list_assets(&state, &args).await,
-                    _ => Err(AppError::new(
-                        AppErrorCode::NotFound,
-                        format!("Unknown tool: {}", tool_name),
-                    )),
-                };
+                let res = bridge::forward_tool_call(&app_data_dir, tool_name, &args).await;
 
                 match res {
                     Ok(val) => json!({

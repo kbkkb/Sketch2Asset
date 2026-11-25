@@ -97,6 +97,13 @@ If the `sketch2asset` MCP server is connected in your toolset, call these tools 
 - `s2a_generate_character`: Generate character turnaround sheets (`"turnaround"`), outfit skinning (`"outfit"`), animation sprite sheets (`"spritesheet"`), or expression grids (`"expression"`), with optional `project`, `profile_id`, `model`, `anchor_image_path`, `size`, `auto_remove_bg`, and `output_path`.
 - `s2a_edit_region`: Modify a rectangular region `[x, y, w, h]` of an asset with optional `profile_id` and `model` overrides.
 - `s2a_list_assets`: Query generated assets in the Sketch2Asset library.
+- `s2a_list_actions`: List built-in and custom 3D stickman pose clips, camera presets, proportions, and weapon types.
+- `s2a_edit_action`: Create or tune a custom 3D pose clip (`action_id`, keyframes, camera, proportion, weapon_type) and sync it live to the UI.
+- `s2a_render_3d_pose`: Render a multi-frame 3D stickman pose sheet PNG (via Desktop Three.js live bridge or built-in software 3D renderer).
+- `s2a_decompose_status`: Inspect Layer Decompose Workshop (See-Through) installation status AND live async `activeJob` progress/result.
+- `s2a_decompose_character`: Decompose a character portrait into up to 23 occluded/inpainted semantic layers + layered `.psd`. Defaults to `async_mode: true` and `cool_ms: 60` (GPU thermal protection), returning `taskId` immediately (~150ms) so it never hits the 3-minute MCP timeout — poll `s2a_decompose_status` until `activeJob.status` is `"completed"` or `"failed"`. Auto-skips redundant BiRefNet matting when the input PNG already contains transparency.
+
+Note: MCP tool calls forward over the local Desktop TCP bridge to the open `Sketch2Asset.exe` window so UI views, progress bars, and user pause/cancel controls remain synchronized in real time.
 
 ## 2. Fallback Method: Direct CLI Execution
 

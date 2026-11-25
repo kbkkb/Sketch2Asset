@@ -589,6 +589,15 @@ impl MattingEngine {
         let rgba = compose_rgba(img, &alpha_full, enhanced, choke.min(5));
         Ok((rgba, final_ep))
     }
+
+    /// Explicitly drop the cached ONNX DirectML/CPU session to immediately reclaim GPU VRAM
+    /// before spawning VRAM-intensive sidecars such as See-Through Layer Decomposition.
+    pub fn unload_session(&self) {
+        let _gpu_lock = CrossProcessGpuLock::acquire();
+        if let Ok(mut guard) = self.cached.lock() {
+            *guard = None;
+        }
+    }
 }
 
 fn run_session_matte(

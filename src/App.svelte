@@ -7,12 +7,15 @@
     Info,
     PanelBottomClose,
     Power,
+    Loader2,
+    Square,
     X
   } from '@lucide/svelte';
   import TitleBar from '$lib/components/layout/TitleBar.svelte';
   import GenerateView from '$features/generate/GenerateView.svelte';
   import StudioView from '$features/studio/StudioView.svelte';
   import CharacterView from '$features/character/CharacterView.svelte';
+  import DecomposeView from '$features/decompose/DecomposeView.svelte';
   import SettingsView from '$features/settings/SettingsView.svelte';
   import { appStore } from '$lib/stores/settings.svelte';
   import { api } from '$lib/api';
@@ -23,7 +26,12 @@
 
   onMount(() => {
     const savedView = loadLastActiveView();
-    if (savedView === 'generate' || savedView === 'studio' || savedView === 'character') {
+    if (
+      savedView === 'generate' ||
+      savedView === 'studio' ||
+      savedView === 'character' ||
+      savedView === 'decompose'
+    ) {
       appStore.activeView = savedView;
     }
     appStore.init();
@@ -63,9 +71,89 @@
       unlistenClose = fn;
     });
 
+    let unlistenMcp: (() => void) | null = null;
+    void listen<any>('mcp-ui-event', async (ev) => {
+      const p = ev.payload ?? {};
+      const isEn = i18n.locale === 'en';
+      switch (p.kind) {
+        case 'settings_synced':
+          await appStore.reloadSettingsFromBackend();
+          appStore.notifyAssetsChanged();
+          if (p.toast) appStore.toast('info', p.toast);
+          break;
+        case 'generate_started':
+          appStore.activeView = 'generate';
+          appStore.activeMcpBanner = {
+            taskId: p.taskId,
+            view: 'generate',
+            label: isEn ? 'AI Agent generating asset...' : 'AI Agent 正在生图...'
+          };
+          break;
+        case 'character_started':
+          appStore.activeView = 'character';
+          appStore.activeMcpBanner = {
+            taskId: p.taskId,
+            view: 'character',
+            label: isEn ? 'AI Agent generating character...' : 'AI Agent 正在角色工坊生成...'
+          };
+          break;
+        case 'studio_started':
+          appStore.activeView = 'studio';
+          appStore.activeMcpBanner = {
+            taskId: p.taskId,
+            view: 'studio',
+            label:
+              p.op === 'matting'
+                ? isEn
+                  ? 'AI Agent removing background...'
+                  : 'AI Agent 正在智能抠图...'
+                : isEn
+                  ? 'AI Agent editing region...'
+                  : 'AI Agent 正在局部重绘...'
+          };
+          break;
+        case 'decompose_started':
+          appStore.activeView = 'decompose';
+          appStore.activeMcpBanner = {
+            taskId: p.taskId,
+            view: 'decompose',
+            label: isEn ? 'AI Agent decomposing 23 layers...' : 'AI Agent 正在 23 层智能拆图...'
+          };
+          break;
+        case 'pose_updated':
+          appStore.activeView = 'character';
+          break;
+        case 'generate_completed':
+        case 'character_completed':
+        case 'studio_completed':
+        case 'decompose_completed':
+          if (appStore.activeMcpBanner?.taskId === p.taskId) {
+            appStore.activeMcpBanner = null;
+          }
+          appStore.notifyAssetsChanged();
+          await appStore.refreshProjects();
+          break;
+        case 'generate_cancelled':
+        case 'generate_failed':
+        case 'character_cancelled':
+        case 'character_failed':
+        case 'studio_cancelled':
+        case 'studio_failed':
+        case 'decompose_cancelled':
+        case 'decompose_failed':
+          if (appStore.activeMcpBanner?.taskId === p.taskId) {
+            appStore.activeMcpBanner = null;
+          }
+          break;
+      }
+    }).then((fn) => {
+      unlistenMcp = fn;
+    });
+
     return () => {
       clearInterval(revTimer);
       unlistenClose?.();
+      unlistenMcp?.();
     };
   });
 
@@ -130,10 +218,40 @@
     <div class={appStore.activeView === 'character' ? 'flex h-full w-full overflow-hidden' : 'hidden'}>
       <CharacterView />
     </div>
+    <div class={appStore.activeView === 'decompose' ? 'flex h-full w-full overflow-hidden' : 'hidden'}>
+      <DecomposeView />
+    </div>
     {#if appStore.activeView === 'settings'}
       <SettingsView />
     {/if}
   </main>
+
+  <!-- Floating Global MCP Live Activity Pill -->
+  {#if appStore.activeMcpBanner}
+    {@const banner = appStore.activeMcpBanner}
+    <div
+      class="fixed top-12 right-4 z-[95] flex items-center gap-2.5 rounded-full border border-accent/50 bg-ink-1/95 px-3 py-1.5 text-xs shadow-2xl backdrop-blur-xl"
+    >
+      <button
+        type="button"
+        onclick={() => (appStore.activeView = banner.view)}
+        class="flex items-center gap-1.5 font-semibold text-accent hover:underline"
+      >
+        <Loader2 size={13} class="animate-spin" />
+        <span class="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] font-bold">MCP</span>
+        <span>{banner.label}</span>
+      </button>
+      <button
+        type="button"
+        onclick={() => api.cancelMcpTask(banner.taskId)}
+        class="flex items-center gap-1 rounded-full border border-err/60 bg-err/15 px-2.5 py-0.5 text-[11px] font-bold text-err transition-colors hover:bg-err hover:text-white"
+        title={i18n.locale === 'en' ? 'Stop MCP Task' : '手动中止当前 AI Agent 任务'}
+      >
+        <Square size={10} fill="currentColor" />
+        <span>{i18n.locale === 'en' ? 'Stop' : '中止'}</span>
+      </button>
+    </div>
+  {/if}
 
   <!-- Global Top-Center Prominent Toast Stack -->
   <div

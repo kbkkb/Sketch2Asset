@@ -1780,6 +1780,254 @@ pub fn get_library_revision(state: State<'_, AppState>) -> AppResult<String> {
 }
 
 #[tauri::command]
+pub fn get_decompose_status(state: State<'_, AppState>) -> crate::decompose::DecomposeEnvStatus {
+    crate::decompose::get_decompose_env_status(state.inner())
+}
+
+#[tauri::command]
+pub async fn pick_decompose_dir(initial_dir: Option<String>) -> Option<String> {
+    tokio::task::spawn_blocking(move || {
+        crate::decompose::pick_directory_native(initial_dir.as_deref())
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+#[tauri::command]
+pub fn set_decompose_dir(
+    state: State<'_, AppState>,
+    dir_path: String,
+) -> AppResult<crate::decompose::DecomposeEnvStatus> {
+    crate::decompose::set_decompose_extension_dir(state.inner(), dir_path)
+}
+
+#[tauri::command]
+pub async fn install_decompose_extension(
+    app: tauri::AppHandle,
+    target_dir: String,
+    quant_mode: String,
+    mirror: String,
+    pypi_mirror: Option<String>,
+) -> AppResult<crate::decompose::DecomposeEnvStatus> {
+    crate::decompose::install_decompose_extension(app, target_dir, quant_mode, mirror, pypi_mirror)
+        .await
+}
+
+#[tauri::command]
+pub fn cancel_decompose_install() {
+    crate::decompose::cancel_decompose_install();
+}
+
+#[tauri::command]
+pub fn cancel_mcp_task(state: State<'_, AppState>, task_id: String) -> bool {
+    state.cancel_mcp_task(&task_id)
+}
+
+#[tauri::command]
+pub fn cancel_decompose_run(state: State<'_, AppState>) {
+    crate::decompose::cancel_decompose_run();
+    state.cancel_all_decompose_mcp_tasks();
+}
+
+#[tauri::command]
+pub fn save_decompose_layers(
+    manifest_path: String,
+    layers: Vec<crate::decompose::DecomposeLayerInfo>,
+) -> AppResult<()> {
+    crate::decompose::save_decompose_layers_state(&manifest_path, layers)
+}
+
+#[tauri::command]
+pub async fn split_decompose_layer(
+    app: tauri::AppHandle,
+    manifest_path: String,
+    layers: Vec<crate::decompose::DecomposeLayerInfo>,
+    layer_id: String,
+    mode: String,
+) -> AppResult<crate::decompose::DecomposeJobResult> {
+    tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        crate::decompose::split_decompose_layer(
+            state.inner(),
+            &manifest_path,
+            layers,
+            &layer_id,
+            &mode,
+        )
+    })
+    .await
+    .map_err(|e| AppError::new(AppErrorCode::Io, e.to_string()))?
+}
+
+#[tauri::command]
+pub fn uninstall_decompose_extension(
+    state: State<'_, AppState>,
+) -> AppResult<crate::decompose::DecomposeEnvStatus> {
+    crate::decompose::uninstall_decompose_extension(state.inner())
+}
+
+#[tauri::command]
+pub async fn run_decompose_character(
+    app: tauri::AppHandle,
+    opts: crate::decompose::RunDecomposeOptions,
+) -> AppResult<crate::decompose::DecomposeJobResult> {
+    tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let mut clean_opts = opts;
+        let mut tmp_upload_file: Option<PathBuf> = None;
+
+        // Decode data URLs (PNG/JPEG/WebP) from memory and re-encode as valid PNG so `image::open` never fails on extension mismatch
+        if clean_opts.input_path.trim().starts_with("data:image/") {
+            let bytes = decode_data_url_bytes(&clean_opts.input_path)?;
+            let dyn_img = image::load_from_memory(&bytes).map_err(|e| {
+                AppError::new(
+                    AppErrorCode::ImageDecode,
+                    format!("无法解码上传的本地立绘图片: {e}"),
+                )
+            })?;
+            let tmp_src = std::env::temp_dir().join(format!(
+                "s2a_decompose_src_{}.png",
+                uuid::Uuid::new_v4().simple()
+            ));
+            dyn_img
+                .save_with_format(&tmp_src, image::ImageFormat::Png)
+                .map_err(|e| AppError::new(AppErrorCode::Io, e.to_string()))?;
+            clean_opts.input_path = tmp_src.to_string_lossy().to_string();
+            tmp_upload_file = Some(tmp_src);
+        }
+
+        let res_val = clean_opts.resolution.unwrap_or(1024).clamp(768, 1536);
+        let steps_val = clean_opts.steps.unwrap_or(20).clamp(10, 50);
+        let cool_val = clean_opts.cool_ms.unwrap_or(60).min(500);
+        let active_proj = clean_opts
+            .project
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| state.settings.lock().unwrap().active_project.clone());
+        let ui_task_id = format!("ui_decompose_{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+
+        if let Err(cur) = state.try_start_decompose_tracker(crate::state::DecomposeJobTracker {
+            task_id: ui_task_id.clone(),
+            status: "running".to_string(),
+            input_path: clean_opts.input_path.clone(),
+            project: active_proj,
+            resolution: res_val,
+            steps: steps_val,
+            cool_ms: cool_val,
+            stage: "prepare".to_string(),
+            percent: 1,
+            message: "正在初始化拆图任务...".to_string(),
+            started_at_ms: chrono::Utc::now().timestamp_millis(),
+            finished_at_ms: None,
+            error: None,
+            result: None,
+        }) {
+            if let Some(tmp) = tmp_upload_file {
+                let _ = fs::remove_file(tmp);
+            }
+            return Err(AppError::new(
+                AppErrorCode::InvalidInput,
+                format!("已有拆图任务正在运行中 ({})，请等待完成或先点击中止", cur.task_id),
+            ));
+        }
+
+        let run_res = crate::decompose::run_decompose_blocking(Some(&app), state.inner(), clean_opts);
+        if let Some(tmp) = tmp_upload_file {
+            let _ = fs::remove_file(tmp);
+        }
+
+        match &run_res {
+            Ok(job) => {
+                state.finish_decompose_tracker(&ui_task_id, "completed", Some(job.clone()), None);
+            }
+            Err(e) => {
+                let st_label = if e.code == AppErrorCode::Cancelled {
+                    "cancelled"
+                } else {
+                    "failed"
+                };
+                state.finish_decompose_tracker(&ui_task_id, st_label, None, Some(e.message.clone()));
+            }
+        }
+        run_res
+    })
+    .await
+    .map_err(|e| AppError::new(AppErrorCode::Io, e.to_string()))?
+}
+
+#[tauri::command]
+pub fn list_decompose_history(
+    state: State<'_, AppState>,
+) -> Vec<crate::decompose::DecomposeHistoryItem> {
+    crate::decompose::list_decompose_history(state.inner())
+}
+
+#[tauri::command]
+pub fn load_decompose_job(
+    manifest_path: String,
+) -> AppResult<crate::decompose::DecomposeJobResult> {
+    crate::decompose::load_decompose_job_from_manifest(std::path::Path::new(&manifest_path))
+}
+
+#[tauri::command]
+pub async fn defringe_decompose_layer(
+    layer_image_path: String,
+    choke_px: u32,
+) -> AppResult<String> {
+    tokio::task::spawn_blocking(move || {
+        crate::decompose::apply_layer_defringe(&layer_image_path, choke_px)
+    })
+    .await
+    .map_err(|e| AppError::new(AppErrorCode::Io, e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn export_decompose_psd(
+    app: tauri::AppHandle,
+    manifest_path: String,
+    layers: Vec<crate::decompose::DecomposeLayerInfo>,
+    out_psd_path: Option<String>,
+    reveal: bool,
+) -> AppResult<String> {
+    let psd_path = tokio::task::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        crate::decompose::save_and_rebuild_psd(state.inner(), &manifest_path, layers, out_psd_path)
+    })
+    .await
+    .map_err(|e| AppError::new(AppErrorCode::Io, e.to_string()))??;
+    if reveal {
+        let _ = reveal_in_explorer(psd_path.clone());
+    }
+    Ok(psd_path)
+}
+
+#[tauri::command]
+pub async fn export_decompose_bundle(
+    manifest_path: String,
+    dest_dir: String,
+    layers: Vec<crate::decompose::DecomposeLayerInfo>,
+    reveal: bool,
+) -> AppResult<String> {
+    let dir_out = tokio::task::spawn_blocking(move || {
+        crate::decompose::export_decompose_parts_bundle(&manifest_path, &dest_dir, layers)
+    })
+    .await
+    .map_err(|e| AppError::new(AppErrorCode::Io, e.to_string()))??;
+    if reveal {
+        let _ = reveal_in_explorer(dir_out.clone());
+    }
+    Ok(dir_out)
+}
+
+#[tauri::command]
+pub async fn pick_export_dir(initial_dir: Option<String>) -> Option<String> {
+    pick_decompose_dir(initial_dir).await
+}
+
+#[tauri::command]
 pub fn perform_window_close(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -1790,9 +2038,11 @@ pub fn perform_window_close(
             let _ = state.persist_settings();
             let _ = win.hide();
         } else {
+            crate::mcp::bridge::cleanup_bridge_file(&state.app_data_dir);
             app.exit(0);
         }
     } else {
+        crate::mcp::bridge::cleanup_bridge_file(&state.app_data_dir);
         app.exit(0);
     }
     Ok(())

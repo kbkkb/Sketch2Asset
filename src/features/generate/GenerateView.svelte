@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import {
     Sparkles,
     ImagePlus,
     X,
+    Square,
     FolderKanban,
     FolderPlus,
     FolderOpen,
@@ -179,13 +181,68 @@
     }
   });
 
+  let unlistenMcp: UnlistenFn | null = null;
+  const PRESET_SIZES = new Set([
+    '1024x1024',
+    '1536x1024',
+    '1024x1536',
+    '1344x768',
+    '768x1344',
+    '1920x1080',
+    '1080x1920',
+    '2048x2048',
+    '2560x1440',
+    '3840x2160',
+    '4096x4096',
+    'auto'
+  ]);
+
   onMount(async () => {
+    unlistenMcp = await listen<any>('mcp-ui-event', (ev) => {
+      const p = ev.payload ?? {};
+      if (p.kind === 'generate_started') {
+        if (typeof p.prompt === 'string') {
+          jobsStore.promptDraft = p.prompt;
+        }
+        if (p.archetype && ARCHETYPE_PRESETS.some((a) => a.id === p.archetype)) {
+          selectedArchetype = p.archetype;
+        }
+        if (typeof p.size === 'string' && p.size.trim()) {
+          if (PRESET_SIZES.has(p.size)) {
+            selectedSize = p.size;
+          } else if (p.size.includes('x')) {
+            const [sw, sh] = p.size.split('x').map((n: string) => parseInt(n, 10));
+            if (sw > 0 && sh > 0) {
+              selectedSize = 'custom';
+              customSizeW = sw;
+              customSizeH = sh;
+            }
+          }
+        }
+        jobsStore.startMcpJob(p.taskId, p.prompt || '', p.model || '', 1);
+      } else if (p.kind === 'generate_completed') {
+        jobsStore.completeMcpJob(p.taskId, p.asset);
+      } else if (p.kind === 'generate_cancelled') {
+        jobsStore.cancelMcpJob(p.taskId);
+        appStore.toast(
+          'info',
+          i18n.locale === 'en' ? 'MCP image generation cancelled' : '已手动中止 AI Agent 生图任务'
+        );
+      } else if (p.kind === 'generate_failed') {
+        jobsStore.failMcpJob(p.taskId, p.error || 'MCP generation failed');
+      }
+    });
+
     if (appStore.settings) {
       const targetProj = appStore.settings.activeProject ?? '';
       lastLoadedProject = targetProj;
       syncProjectDraft();
       await jobsStore.loadAssets(targetProj);
     }
+  });
+
+  onDestroy(() => {
+    unlistenMcp?.();
   });
 
   function syncProjectDraft() {
@@ -672,24 +729,50 @@
                 : 'border-accent/40 bg-ink-1'} p-4"
             >
               {#if job.status === 'running'}
-                <div class="flex items-center justify-between">
+                <div class="flex items-center justify-between gap-1">
                   <span
                     class="flex items-center gap-1.5 font-mono text-xs font-semibold text-accent"
                   >
                     <Loader2 size={14} class="animate-spin" />
                     <span>{job.elapsedSec}s</span>
                   </span>
-                  <span
-                    class="rounded bg-ink-2 px-2 py-0.5 font-mono text-[10px] text-fg-muted"
-                  >
-                    ×{job.count}
-                  </span>
+                  <div class="flex items-center gap-1">
+                    {#if job.isMcp}
+                      <span class="rounded bg-accent/20 px-1.5 py-0.5 font-mono text-[9px] font-bold text-accent">
+                        MCP
+                      </span>
+                    {/if}
+                    <span
+                      class="rounded bg-ink-2 px-2 py-0.5 font-mono text-[10px] text-fg-muted"
+                    >
+                      ×{job.count}
+                    </span>
+                  </div>
                 </div>
                 <div class="my-auto flex flex-col items-center text-center">
-                  <div class="text-xs font-semibold text-fg">{i18n.t('job_running_title')}</div>
+                  <div class="text-xs font-semibold text-fg">
+                    {job.isMcp
+                      ? i18n.locale === 'en'
+                        ? 'AI Agent Generating...'
+                        : 'AI Agent 正在生图中...'
+                      : i18n.t('job_running_title')}
+                  </div>
                   <div class="mt-1 line-clamp-2 text-[11px] text-fg-muted">{job.prompt}</div>
                 </div>
-                <div class="truncate font-mono text-[10px] text-fg-subtle">{job.model}</div>
+                <div class="flex items-center justify-between gap-2">
+                  <div class="min-w-0 truncate font-mono text-[10px] text-fg-subtle">{job.model}</div>
+                  {#if job.isMcp && job.mcpTaskId}
+                    <button
+                      type="button"
+                      onclick={() => api.cancelMcpTask(job.mcpTaskId!)}
+                      class="flex shrink-0 items-center gap-1 rounded-md border border-err/60 bg-err/15 px-2 py-0.5 text-[10px] font-bold text-err transition-colors hover:bg-err hover:text-white"
+                      title={i18n.locale === 'en' ? 'Cancel Generation' : '手动中止本次生图'}
+                    >
+                      <Square size={9} fill="currentColor" />
+                      <span>{i18n.locale === 'en' ? 'Stop' : '中止'}</span>
+                    </button>
+                  {/if}
+                </div>
               {:else}
                 <!-- Top Bar: Error Title + X Dismiss Button -->
                 <div class="flex items-center justify-between text-err">
@@ -1548,6 +1631,18 @@
     >
       <SlidersHorizontal size={13} />
       <span>{i18n.t('asset_send_to_studio')}</span>
+    </button>
+    <button
+      type="button"
+      onclick={() => {
+        const target = contextMenu!.asset;
+        contextMenu = null;
+        appStore.openInDecompose(target);
+      }}
+      class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-medium text-fg hover:bg-ink-2 hover:text-accent"
+    >
+      <Layers size={13} />
+      <span>{i18n.locale === 'en' ? 'Send to Layer Split' : '送入拆图工坊'}</span>
     </button>
     <button
       type="button"

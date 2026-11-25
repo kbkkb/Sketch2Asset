@@ -10,26 +10,27 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Release-v0.2.2-84cc16.svg" alt="Version v0.2.2">
+  <img src="https://img.shields.io/badge/Release-v0.3.0-84cc16.svg" alt="Version v0.3.0">
   <img src="https://img.shields.io/badge/Architecture-Tauri_2_%2B_Rust-orange.svg" alt="Tauri 2 + Rust">
   <img src="https://img.shields.io/badge/Frontend-Svelte_5_%2B_Three.js-ff3e00.svg" alt="Svelte 5 + Three.js">
   <img src="https://img.shields.io/badge/Matting-ONNX_DirectML_GPU-10b981.svg" alt="ONNX Runtime DirectML">
-  <img src="https://img.shields.io/badge/Agent-MCP_Server_(11_Tools)-6366f1.svg" alt="MCP Server">
+  <img src="https://img.shields.io/badge/Decompose-2.5D_23+_Layers-ec4899.svg" alt="2.5D Layer Decompose">
+  <img src="https://img.shields.io/badge/Agent-MCP_Server_(13_Tools)-6366f1.svg" alt="MCP Server">
   <img src="https://img.shields.io/badge/Workflow-ComfyUI_Ready-06b6d4.svg" alt="ComfyUI Ready">
   <img src="https://img.shields.io/badge/License-MIT-22c55e.svg" alt="MIT License">
 </p>
 
 ---
 
-## 为什么选择 Sketch2Asset v0.2.1？
+## 为什么选择 Sketch2Asset v0.3.0？
 
 通用 AI 生图工具在面对实际游戏开发管线时，往往卡在“最后 1 公里”：
 - 序列帧挥刀跨过网格线被拦腰截断，或角色跳跃帧在贴图内部强行浮空导致 Unity / Godot 碰撞体错位；
-- 生成的像素图带有扩散抗锯齿杂色与大小不一的“伪像素（Mixels）”；
-- 透明 PNG 导入游戏引擎后，在双线性过滤下边缘泛起一圈白边；
-- 缺少与 AI Coding Agent（Claude / Cursor / Antigravity）以及本地 ComfyUI 工作流的自动化打通。
+- 单张角色立绘要导入 Spine / Live2D 做 2.5D 动效时，缺少被遮挡的后发、内衬与五官散件，手工补全成本极高；
+- 生成的像素图带有扩散抗锯齿杂色与大小不一的“伪像素（Mixels）”，透明 PNG 在双线性过滤下边缘泛白边；
+- 缺少与 AI Coding Agent（Claude / Cursor / Antigravity）及本地 ComfyUI 工作流的双向实时自动化打通。
 
-**Sketch2Asset** 采用 **Tauri 2 + Rust + Svelte 5 + Three.js** 纯原生桌面架构打造，零 Python 环境依赖，将**生图、3D 动作引导、序列帧引擎级校准、GPU 抠图与 MCP 自动化**整合为一套可直接投入生产的 **Game-Ready** 资产管线。
+**Sketch2Asset** 采用 **Tauri 2 + Rust + Svelte 5 + Three.js** 原生桌面架构打造，核心生图、GPU 抠图与 3D 动作 K 帧零 Python 依赖（同时支持按需一键独立部署 2.5D 拆图扩展），将**生图、3D 动作引导、序列帧引擎级校准、DirectML GPU 抠图、23 层 PSD 智能拆图与 MCP 桌面实时联动**整合为 **Game-Ready** 全链路生产管线。
 
 ---
 
@@ -141,21 +142,29 @@
 
 ---
 
-### 四、 AI Agent 互联中心（MCP）、ComfyUI 与桌面原生体验
+### 四、 2.5D 拆图工坊（Layer Decompose Workshop）— 23+ 层智能透视拆解与 XY 手柄 *(v0.3.0 New)*
+
+- **一键部署独立推理扩展（See-Through 集成）**：在隔离目录中自动配置 Python 3.12 + CUDA 12.8 运行时，Rust 8 线程 HTTP Range 加速拉取 `NF4`（4-bit 量化）/ `BF16` 模型权重，支持自动释放 DirectML 显存与透明立绘跳过冗余抠图。
+- **Unity 风格 2D XY 移动手柄（Move Gizmo）**：提供红轴（X）、绿轴（Y）与蓝框（自由 XY）拖拽、画布缩放恒定大小手柄、`Q` / `W` 切换、`1 / 5 / 20px` 方向键微调，导出标准分层 `.psd` 与散件包时自动烘焙偏移坐标。
+- **二次精拆与四重保真管线**：支持**左右对称拆分（`-l` / `-r`）**、基于 Marigold 伪深度聚类的**前后景深二拆（`-back` / `-front` 并补全遮挡带）**、单层去杂边、缺失靴尖/发饰自动抢救、Live2D 五官排序与肤色校准，并可一键将散件送入「精修工坊」。
+- **硬件自适应温控护卡**：按显卡剩余显存自动切换 Group Offload / CPU Offload，UI 与 MCP 默认启用 `cool_ms: 60` 步间降频散热，安全兼容长期连续出图。
+
+---
+
+### 五、 AI Agent 互联中心（MCP）、ComfyUI 与桌面原生体验
 
 <p align="center">
   <!-- 📷 [截图占位 #4] 设置页 -> AI Agent 互联中心或 ComfyUI 工作流连接界面 -->
   <img src="docs/media/settings-mcp-comfyui.png" alt="AI Agent 互联中心与 ComfyUI 设置" width="88%">
 </p>
 
-- **独立 MCP Server (`sketch2asset-mcp.exe`)** *(v0.2.1 New)*：
-  - 提供 **11 个标准 MCP 工具**（生图、GPU 抠图、角色三视图/序列帧派生、读取与编辑 `MOD-04` 3D 动作并实时桌面渲染、局部框选重绘、项目管理）。
-  - **实时双端同步**：桌面端设置修改实时落盘供 MCP 读取；前端每 2.5 秒静默轮询 `library_revision`，AI Agent 生成的资产无需手动切换界面即可自动出现在工作台/角色工坊。
-  - **一键接入引导**：支持在设置页直接查看/安装/复制 Claude Desktop、Cursor、Antigravity 等客户端的 `mcpServers` 配置。
-- **ComfyUI 本地工作流直连** *(v0.2.1 New)*：支持配置本地 ComfyUI 地址与连通性测试，导入自定义工作流 JSON 并映射 Prompt、宽高、Batch Size、采样步数与参考图节点。
-- **原生 Windows 系统托盘与更新提醒** *(v0.2.1 New)*：支持最小化到系统托盘、关闭窗口询问记忆（每次询问 / 最小化到托盘 / 直接退出）、顶栏实时版本号显示及新版本 SemVer 检测提示。
-- **拆图工坊（Decompose · 即将推出）**：顶部导航栏已预留入口，后续版本将接入透明图层拆解管线。
-- **系统级数据安全隔离**：API Key 经 Windows 原生凭据管理器（DPAPI）加密；全部项目库与模型隔离存放于 `%AppData%\com.sketch2asset.app`。
+- **MCP 桌面端实时联动桥接 (`sketch2asset-mcp.exe`)** *(v0.3.0 Upgraded)*：
+  - 扩展至 **13 个标准 MCP 工具**（含生图、GPU 抠图、角色派生、`MOD-04` 3D 动作读写渲染、局部框选重绘、项目管理，以及新增 `s2a_decompose_status` 和默认异步的 `s2a_decompose_character`）。
+  - **实时同步与前台控制**：通过带 Session Token 鉴权的本地 TCP 桥接直驱已打开的桌面端窗口——AI Agent 操作时界面自动切页展示实时进度，且支持用户手动暂停/中止。
+  - **一键接入引导**：支持在设置页直接查看/安装/复制 Claude Desktop、Cursor、Antigravity 等客户端的 `mcpServers` 配置与同步 `SKILL.md`。
+- **ComfyUI 本地工作流直连**：支持配置本地 ComfyUI 地址与连通性测试，导入自定义工作流 JSON 并映射 Prompt、宽高、Batch Size、采样步数与参考图节点。
+- **原生桌面体验与增量更新**：支持单实例防多开唤醒、系统托盘（`ask` / `tray` / `exit`）、顶栏新版本提醒与 **设置页一键应用内增量更新（`v0.2.2+`）**。
+- **系统级数据安全隔离**：API Key 经 Windows 原生凭据管理器（DPAPI）加密；全部项目库与扩展子目录隔离管理。
 
 ---
 
@@ -194,18 +203,21 @@ sketch2asset/
 │   │   ├── generate/                     # 资产锻造工坊（7 大品类、变量矩阵、多图批注）
 │   │   ├── character/                    # 角色工坊（MOD-01 ~ MOD-04：三视图/序列帧/表情/3D K 帧）
 │   │   ├── studio/                       # 精修工坊（GPU 抠图、像素纯化、魔棒/笔刷、框选重绘）
-│   │   └── settings/                     # 设置中心（API 供应商、ComfyUI、AI Agent 互联、托盘设置）
+│   │   ├── decompose/                    # 2.5D 拆图工坊（23 层 PSD 分解、Unity 2D XY 手柄）
+│   │   └── settings/                     # 设置中心（API 供应商、ComfyUI、AI Agent 互联、托盘/更新）
 │   └── lib/
-│       ├── components/                   # 标题栏（版本/更新提示/拆图占位）、关闭弹窗等
+│       ├── components/                   # 标题栏（版本/更新提示/工坊导航）、关闭弹窗等
 │       ├── imaging/                      # 连通域切片、脚底重心对齐、像素纯化、前景色反解
 │       ├── i18n/                         # 中英双语响应式字典
 │       └── stores/                       # 全局状态与库版本自动同步流
 ├── src-tauri/                            # Tauri 2 + Rust 后端 + 独立 MCP Binary
 │   └── src/
 │       ├── bin/mcp.rs                    # sketch2asset-mcp 独立 MCP 服务端
-│       ├── commands/                     # IPC 命令与 Agent Hub 集成
+│       ├── commands/                     # IPC 命令、Agent Hub 与应用内增量更新
+│       ├── decompose/                    # 扩展部署、8 线程加速下载与 See-Through 推理管线
 │       ├── library/                      # SQLite 3 (WAL) 资产库与 revision 追踪
 │       ├── matting/                      # ONNX Runtime (DirectML) 推理与去白边后处理
+│       ├── mcp/                          # 13 工具执行器、TCP 桌面实时桥接与 SKILL.md 模板
 │       └── providers/                    # OpenAI Images / Chat / ComfyUI 多协议客户端
 ├── docs/media/                           # README 截图与 GIF 演示素材
 ├── CHANGELOG.md                          # 版本更新日志

@@ -7,6 +7,7 @@ use tauri::{Emitter, Manager, State};
 use crate::error::{AppError, AppErrorCode, AppResult};
 use crate::library::db::{AssetItem, ProjectInfo};
 use crate::matting::MattingModelInfo;
+use crate::postprocess;
 use crate::providers;
 use crate::state::{AppSettings, AppState, ProviderProfile};
 
@@ -158,6 +159,16 @@ pub struct GeneratePayload {
     pub count: usize,
     pub sketch_data_url: Option<String>,
     pub sketch_path: Option<String>,
+    #[serde(default)]
+    pub pixel_grid_size: Option<u32>,
+    #[serde(default)]
+    pub pixel_grid_style: Option<String>,
+    #[serde(default)]
+    pub pixel_auto_snap: Option<bool>,
+    #[serde(default)]
+    pub pixel_auto_cutout: Option<bool>,
+    #[serde(default)]
+    pub pixel_palette_colors: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -205,68 +216,188 @@ pub async fn generate_assets(
 
     // Resolve optional sketch input
     let sketch_bytes = resolve_sketch_input(&payload)?;
-
-    // Assemble final structured game asset prompt
-    let final_prompt = assemble_game_asset_prompt(&payload, sketch_bytes.is_some());
+    let active_grid_cells = payload.pixel_grid_size.filter(|&g| (8..=256).contains(&g));
+    let fallback_prompt = assemble_game_asset_prompt(&payload, sketch_bytes.is_some());
 
     let batch_count = payload.count.clamp(1, 16);
     let mut created_assets = Vec::new();
+    let mut last_err: Option<AppError> = None;
 
     for _ in 0..batch_count {
-        let (img_bytes, via) = if api_mode == "comfyui" {
-            providers::comfyui::generate_via_comfyui(
-                &state.http,
-                &api_base,
-                if api_key.is_empty() { None } else { Some(&api_key) },
-                &model,
-                &final_prompt,
-                &payload.negative_prompt,
-                &payload.size,
-                sketch_bytes.clone(),
-                None,
-                comfy_cfg.as_ref(),
-            )
-            .await?
-        } else if api_mode == "chat" {
-            providers::generate_via_chat(
-                &state.http,
-                &api_base,
-                &api_key,
-                &model,
-                &final_prompt,
-                sketch_bytes.clone(),
-            )
-            .await?
-        } else {
-            providers::generate_via_images(
-                &state.http,
-                &api_base,
-                &api_key,
-                &model,
-                &final_prompt,
-                &payload.size,
-                sketch_bytes.clone(),
-            )
-            .await?
-        };
+        let step_res: AppResult<(Vec<u8>, String, bool)> = async {
+            if let Some(grid_cells) = active_grid_cells {
+                let (tw, th) = providers::parse_size_dims(&payload.size).unwrap_or((1024, 1024));
+                let grid_style =
+                    postprocess::PixelGridStyle::from_str_opt(payload.pixel_grid_style.as_deref());
+                let (guide_png, cols, rows) =
+                    postprocess::render_checkerboard_guide_png(tw, th, grid_cells, grid_style)
+                        .map_err(|e| AppError::new(AppErrorCode::Internal, e))?;
+                let guided_prompt = assemble_guided_pixel_prompt(
+                    &payload,
+                    sketch_bytes.is_some(),
+                    cols,
+                    rows,
+                    grid_style,
+                );
+                let (mut raw_bytes, ep) = providers::generate_with_grid_guide(
+                    &state.http,
+                    &api_mode,
+                    &api_base,
+                    &api_key,
+                    &model,
+                    &guided_prompt,
+                    &fallback_prompt,
+                    &payload.negative_prompt,
+                    &payload.size,
+                    sketch_bytes.clone(),
+                    guide_png,
+                    comfy_cfg.as_ref(),
+                )
+                .await?;
+                let mut skip_resize = false;
+                if payload.pixel_auto_snap.unwrap_or(true) && !ep.contains("grid-fallback") {
+                    if let Ok(mut dyn_img) = image::load_from_memory(&raw_bytes) {
+                        if dyn_img.width() != tw || dyn_img.height() != th {
+                            dyn_img = fit_image_to_target_size(dyn_img, tw, th);
+                        }
+                        let do_cutout = payload
+                            .pixel_auto_cutout
+                            .unwrap_or(grid_style == postprocess::PixelGridStyle::Chroma);
+                        let is_tile = payload.archetype == "tile_texture";
+                        let (snapped, _native, scols, srows) = postprocess::snap_guided_pixel_art(
+                            &dyn_img.to_rgba8(),
+                            grid_cells,
+                            grid_style,
+                            do_cutout,
+                            is_tile,
+                            payload.pixel_palette_colors,
+                        );
+                        let mut cur = std::io::Cursor::new(Vec::new());
+                        if image::DynamicImage::ImageRgba8(snapped)
+                            .write_to(&mut cur, image::ImageFormat::Png)
+                            .is_ok()
+                        {
+                            raw_bytes = cur.into_inner();
+                            skip_resize = true;
+                        }
+                        Ok((
+                            raw_bytes,
+                            format!("{} [grid-{}x{}]", ep, scols, srows),
+                            skip_resize,
+                        ))
+                    } else {
+                        Ok((raw_bytes, ep, skip_resize))
+                    }
+                } else {
+                    Ok((raw_bytes, ep, skip_resize))
+                }
+            } else if api_mode == "comfyui" {
+                let (b, v) = providers::comfyui::generate_via_comfyui(
+                    &state.http,
+                    &api_base,
+                    if api_key.is_empty() { None } else { Some(&api_key) },
+                    &model,
+                    &fallback_prompt,
+                    &payload.negative_prompt,
+                    &payload.size,
+                    sketch_bytes.clone(),
+                    None,
+                    comfy_cfg.as_ref(),
+                )
+                .await?;
+                Ok((b, v, false))
+            } else if api_mode == "chat" {
+                let (b, v) = providers::generate_via_chat(
+                    &state.http,
+                    &api_base,
+                    &api_key,
+                    &model,
+                    &fallback_prompt,
+                    sketch_bytes.clone(),
+                )
+                .await?;
+                Ok((b, v, false))
+            } else {
+                let (b, v) = providers::generate_via_images(
+                    &state.http,
+                    &api_base,
+                    &api_key,
+                    &model,
+                    &fallback_prompt,
+                    &payload.size,
+                    sketch_bytes.clone(),
+                )
+                .await?;
+                Ok((b, v, false))
+            }
+        }
+        .await;
 
-        let asset = save_generated_image(
-            &state,
-            &img_bytes,
-            &payload.project,
-            &payload.archetype,
-            &payload.prompt,
-            &model,
-            &via,
-            Some(&payload.size),
-        )?;
-        created_assets.push(asset);
+        match step_res {
+            Ok((img_bytes, via, skip_resize_on_save)) => {
+                let asset = save_generated_image(
+                    &state,
+                    &img_bytes,
+                    &payload.project,
+                    &payload.archetype,
+                    &payload.prompt,
+                    &model,
+                    &via,
+                    if skip_resize_on_save {
+                        None
+                    } else {
+                        Some(&payload.size)
+                    },
+                )?;
+                created_assets.push(asset);
+            }
+            Err(err) => {
+                eprintln!("[generate_assets] item generation failed: {}", err.message);
+                last_err = Some(err);
+                break;
+            }
+        }
+    }
+
+    if created_assets.is_empty() {
+        if let Some(err) = last_err {
+            return Err(err);
+        }
     }
 
     Ok(GenerateResponse {
         assets: created_assets,
         elapsed_ms: start_ts.elapsed().as_millis() as u64,
     })
+}
+
+pub(crate) fn assemble_guided_pixel_prompt(
+    p: &GeneratePayload,
+    has_user_sketch: bool,
+    cols: u32,
+    rows: u32,
+    style: postprocess::PixelGridStyle,
+) -> String {
+    let header = postprocess::build_checkerboard_guide_prompt_rules(
+        cols,
+        rows,
+        style,
+        p.archetype == "tile_texture",
+        has_user_sketch,
+    );
+    let mut stripped = p.clone();
+    stripped.background_prompt.clear();
+    if !stripped.negative_prompt.trim().is_empty() {
+        stripped.negative_prompt = stripped
+            .negative_prompt
+            .split(',')
+            .map(str::trim)
+            .filter(|tok| !tok.is_empty() && !tok.eq_ignore_ascii_case("checkerboard"))
+            .collect::<Vec<_>>()
+            .join(", ");
+    }
+    let body = assemble_game_asset_prompt(&stripped, has_user_sketch);
+    format!("{header}\n\n{body}")
 }
 
 pub(crate) fn assemble_game_asset_prompt(p: &GeneratePayload, has_sketch: bool) -> String {
@@ -875,6 +1006,173 @@ pub async fn run_ai_matting(
         width,
         height,
         provider_info,
+        elapsed_ms: start_ts.elapsed().as_millis() as u64,
+    })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DualBgMattingPayload {
+    pub profile_id: String,
+    pub model: String,
+    pub image_data_url: String,
+    #[serde(default)]
+    pub second_plate_data_url: Option<String>,
+    #[serde(default)]
+    pub choke: u8,
+}
+
+#[tauri::command]
+pub async fn run_dual_bg_matting(
+    state: State<'_, AppState>,
+    payload: DualBgMattingPayload,
+) -> AppResult<MattingResponsePayload> {
+    let start_ts = std::time::Instant::now();
+    let src_bytes = decode_data_url_bytes(&payload.image_data_url)?;
+    let src_dyn = image::load_from_memory(&src_bytes)
+        .map_err(|e| AppError::new(AppErrorCode::ImageDecode, e.to_string()))?;
+    let (src_w, src_h) = (src_dyn.width(), src_dyn.height());
+
+    let src_is_light = crate::matting::is_light_backdrop_plate(&src_dyn);
+
+    // Ensure first plate is flattened onto solid white/black if it had partial alpha
+    let bg_fill = if src_is_light { [255_u8, 255, 255] } else { [0_u8, 0, 0] };
+    let src_rgba = src_dyn.to_rgba8();
+    let mut flat_plate = image::RgbImage::new(src_w, src_h);
+    for (x, y, p) in src_rgba.enumerate_pixels() {
+        let a = (p[3] as f32) / 255.0;
+        let r = (p[0] as f32 * a + bg_fill[0] as f32 * (1.0 - a)).round().clamp(0.0, 255.0) as u8;
+        let g = (p[1] as f32 * a + bg_fill[1] as f32 * (1.0 - a)).round().clamp(0.0, 255.0) as u8;
+        let b = (p[2] as f32 * a + bg_fill[2] as f32 * (1.0 - a)).round().clamp(0.0, 255.0) as u8;
+        flat_plate.put_pixel(x, y, image::Rgb([r, g, b]));
+    }
+    let primary_dyn = image::DynamicImage::ImageRgb8(flat_plate);
+
+    let (second_dyn, via_tag) = if let Some(ref sec_url) = payload
+        .second_plate_data_url
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        let sec_bytes = decode_data_url_bytes(sec_url)?;
+        let img2 = image::load_from_memory(&sec_bytes)
+            .map_err(|e| AppError::new(AppErrorCode::ImageDecode, e.to_string()))?;
+        (img2, "Dual-Plate Smith-Blinn (Manual)".to_string())
+    } else {
+        let (api_base, api_mode, model, comfy_cfg) = {
+            let guard = state.settings.lock().unwrap();
+            let prof = guard
+                .profiles
+                .iter()
+                .find(|p| p.id == payload.profile_id)
+                .ok_or_else(|| AppError::new(AppErrorCode::NotFound, "Profile not found"))?;
+            let m = if payload.model.trim().is_empty() {
+                prof.api_model.clone()
+            } else {
+                payload.model.trim().to_string()
+            };
+            (
+                prof.api_base.clone(),
+                prof.api_mode.clone(),
+                m,
+                prof.comfy_config.clone(),
+            )
+        };
+
+        let opt_key = state.secrets.get_key(&payload.profile_id);
+        if api_mode != "comfyui" && opt_key.is_none() {
+            return Err(AppError::new(
+                AppErrorCode::MissingApiKey,
+                "Please configure the API Key for the active profile first",
+            ));
+        }
+        let api_key = opt_key.unwrap_or_default();
+
+        let mut plate_png = std::io::Cursor::new(Vec::new());
+        primary_dyn
+            .write_to(&mut plate_png, image::ImageFormat::Png)
+            .map_err(|e| AppError::new(AppErrorCode::Io, e.to_string()))?;
+        let plate_bytes = plate_png.into_inner();
+
+        let swap_prompt = if src_is_light {
+            "Precision Alpha Triangulation Reference Pass: Keep the foreground game asset subject, silhouette, internal white/silver details, semi-transparent glass/smoke/fire/magic glow, colors, lighting, and exact pixel position/scale 100% IDENTICAL to the input image. Replace ONLY the solid light background (including any enclosed background holes) with a completely flat, uniform pure black (#000000) background. Zero relighting, zero vignette, zero floor shadow."
+        } else {
+            "Precision Alpha Triangulation Reference Pass: Keep the foreground game asset subject, silhouette, internal dark details, semi-transparent glass/smoke/fire/magic glow, colors, lighting, and exact pixel position/scale 100% IDENTICAL to the input image. Replace ONLY the solid dark background (including any enclosed background holes) with a completely flat, uniform pure white (#FFFFFF) background. Zero relighting, zero vignette, zero floor shadow."
+        };
+
+        let aspect = (src_w as f32) / (src_h.max(1) as f32);
+        let size_str = if aspect > 1.2 {
+            "1536x1024"
+        } else if aspect < 0.8 {
+            "1024x1536"
+        } else {
+            "1024x1024"
+        };
+
+        let (gen_bytes, ep) = if api_mode == "comfyui" {
+            providers::comfyui::generate_via_comfyui(
+                &state.http,
+                &api_base,
+                if api_key.is_empty() { None } else { Some(&api_key) },
+                &model,
+                swap_prompt,
+                "",
+                size_str,
+                Some((plate_bytes, "image/png".to_string())),
+                None,
+                comfy_cfg.as_ref(),
+            )
+            .await?
+        } else if api_mode == "chat" {
+            providers::generate_via_chat(
+                &state.http,
+                &api_base,
+                &api_key,
+                &model,
+                swap_prompt,
+                Some((plate_bytes, "image/png".to_string())),
+            )
+            .await?
+        } else {
+            providers::generate_via_images(
+                &state.http,
+                &api_base,
+                &api_key,
+                &model,
+                swap_prompt,
+                size_str,
+                Some((plate_bytes, "image/png".to_string())),
+            )
+            .await?
+        };
+
+        let img2 = image::load_from_memory(&gen_bytes)
+            .map_err(|e| AppError::new(AppErrorCode::ImageDecode, e.to_string()))?;
+        (img2, format!("Smith-Blinn Dual-Plate ({})", ep))
+    };
+
+    let choke = payload.choke;
+    let rgba_img = tokio::task::spawn_blocking(move || {
+        if src_is_light {
+            crate::matting::triangulate_dual_bg_rgba(&primary_dyn, &second_dyn, choke)
+        } else {
+            crate::matting::triangulate_dual_bg_rgba(&second_dyn, &primary_dyn, choke)
+        }
+    })
+    .await
+    .map_err(|e| AppError::new(AppErrorCode::MattingFailed, e.to_string()))?;
+
+    let (width, height) = rgba_img.dimensions();
+    let mut out_buf = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(rgba_img)
+        .write_to(&mut out_buf, image::ImageFormat::Png)
+        .map_err(|e| AppError::new(AppErrorCode::Io, e.to_string()))?;
+
+    let b64 = base64::engine::general_purpose::STANDARD.encode(out_buf.into_inner());
+    Ok(MattingResponsePayload {
+        image_data_url: format!("data:image/png;base64,{}", b64),
+        width,
+        height,
+        provider_info: via_tag,
         elapsed_ms: start_ts.elapsed().as_millis() as u64,
     })
 }
@@ -2152,6 +2450,11 @@ mod tests {
             count: 1,
             sketch_data_url: sketch_data_url.map(|s| s.to_string()),
             sketch_path: sketch_path.map(|s| s.to_string()),
+            pixel_grid_size: None,
+            pixel_grid_style: None,
+            pixel_auto_snap: None,
+            pixel_auto_cutout: None,
+            pixel_palette_colors: None,
         }
     }
 

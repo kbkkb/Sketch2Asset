@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Release-v0.3.0-84cc16.svg" alt="Version v0.3.0">
+  <img src="https://img.shields.io/badge/Release-v0.3.1-84cc16.svg" alt="Version v0.3.1">
   <img src="https://img.shields.io/badge/Architecture-Tauri_2_%2B_Rust-orange.svg" alt="Tauri 2 + Rust">
   <img src="https://img.shields.io/badge/Frontend-Svelte_5_%2B_Three.js-ff3e00.svg" alt="Svelte 5 + Three.js">
   <img src="https://img.shields.io/badge/Matting-ONNX_DirectML_GPU-10b981.svg" alt="ONNX Runtime DirectML">
@@ -22,7 +22,7 @@
 
 ---
 
-## 为什么选择 Sketch2Asset v0.3.0？
+## 为什么选择 Sketch2Asset v0.3.1？
 
 通用 AI 生图工具在面对实际游戏开发管线时，往往卡在“最后 1 公里”：
 - 序列帧挥刀跨过网格线被拦腰截断，或角色跳跃帧在贴图内部强行浮空导致 Unity / Godot 碰撞体错位；
@@ -88,7 +88,9 @@
   <img src="docs/media/forge-overview.png" alt="资产锻造工坊界面" width="88%">
 </p>
 
-- **7 大游戏资产原型（Archetypes）**：新增 **`序列帧（sprite_sheet）`** 品类，连同 **道具图标、像素精灵、角色立绘、无缝地表贴图、UI 组件、自由创作**，切换时自动注入构图规范与专属修饰词标签。
+- **7 大游戏资产原型（Archetypes）**：涵盖 **`序列帧（sprite_sheet）`**、**道具图标、像素精灵、角色立绘、无缝地表贴图、UI 组件、自由创作**，切换时自动注入构图规范与专属修饰词标签。
+- **棋盘落差画布引导 & 感知色板收敛 *(v0.3.1 New)***：像素模式下自动向模型注入 `16×16` ~ `128×128` 微对比度交替棋盘画布（**青绿微差免抠直出 + 穿透清除闭合内洞** / **浅灰微差零色偏**），引导主体填满 `85%–92%` 画幅，成图先验锁格并通过显著性保护 `redmean` 量化收拢千色杂边。
+- **Google 原生 `:generateContent` 兼容 & 完整错误排查 *(v0.3.1 Fixed)***：自动识别 `generativelanguage.googleapis.com` 直连原生多模态协议（彻底解决 OpenAI 兼容层返回图片报错丢失问题），失败卡片与 Toast 均支持点击 **「详情」** 查看格式化原始报文并一键复制。
 - **变量矩阵与负面护栏**：支持 `[火焰|寒冰|雷电]` × `[巨剑|法杖]` 笛卡尔积最多 16 组并发裂变生成；内置 5 大游戏级负面护栏（禁文字水印、禁边缘裁切、禁地面投射阴影等）。
 - **项目风格锚定与多图框选批注**：支持绑定项目全局 Style Prompt 与最多 4 张风格参考锚定图；可在参考图上直接拉框编号（`#1`、`#2`...）并写局部修改指令。
 
@@ -121,6 +123,8 @@
   <img src="docs/media/demo-pixel-cleaner.png" alt="AI 像素图网格纯化前后对比" width="88%">
 </p>
 
+- **三阶去白边引擎全面升级 & 双底真半透精抠 *(v0.3.1 Upgraded)***：本地离线抠图引入无振铃 `f32` 上采样、**RGB 引导滤波边缘吸附**、**多尺度金字塔前背景分离（`estimate_foreground_ml`）** 与 **各向同性亚像素 `Choke`**；同时新增 **「双底差分真半透精抠」**（Smith-Blinn 白/黑底闭式三角测量），物理还原玻璃、火焰、烟雾与细碎白发透明度。
+- **工业级残差定格 + `k-Centroid` 像素纯化 *(v0.3.1 Overhauled)***：采用重构残差 `(step, phase)` 自动锁格（`Uniform` 零形变锁格 / `Adaptive` 弹性纠偏）、单格独立 OKLAB `k-Centroid (k=2)` 真实主色投票（规整像素图 100% 幂等无损），以及可选 OKLAB 共线夹心去灰边。
 - **本地 DirectML GPU AI 抠图**：基于 Rust `ort` + ONNX Runtime DirectML，免 Python / CUDA，开箱支持 NVIDIA / AMD / Intel 显卡加速，内置 6 款模型在线一键管理：
 
 <details>

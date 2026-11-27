@@ -1,6 +1,6 @@
 [package]
 name = "sketch2asset"
-version = "0.3.0"
+version = "0.3.1"
 description = "Sketch2Asset — AI Game Asset Forge Desktop Client"
 authors = ["kb"]
 edition = "2021"

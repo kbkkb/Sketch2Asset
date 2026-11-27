@@ -129,6 +129,11 @@ export interface GeneratePayload {
   count: number;
   sketchDataUrl?: string | null;
   sketchPath?: string | null;
+  pixelGridSize?: number | null;
+  pixelGridStyle?: 'neutral' | 'chroma';
+  pixelAutoSnap?: boolean;
+  pixelAutoCutout?: boolean;
+  pixelPaletteColors?: number | null;
 }
 
 export interface GenerateResponse {
@@ -153,6 +158,14 @@ export interface MattingRequestPayload {
   modelId: string;
   device: 'auto' | 'gpu' | 'cpu';
   enhanced: boolean;
+  choke: number;
+}
+
+export interface DualBgMattingPayload {
+  profileId: string;
+  model: string;
+  imageDataUrl: string;
+  secondPlateDataUrl?: string | null;
   choke: number;
 }
 

@@ -232,6 +232,7 @@ pub fn run() {
             commands::delete_matting_model,
             commands::open_models_folder,
             commands::run_ai_matting,
+            commands::run_dual_bg_matting,
             commands::read_image_data_url,
             commands::save_studio_asset,
             commands::export_studio_png,

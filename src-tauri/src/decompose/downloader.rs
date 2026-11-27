@@ -26,7 +26,7 @@ pub fn build_direct_http_client() -> AppResult<reqwest::Client> {
         .no_proxy()
         .connect_timeout(Duration::from_secs(20))
         .read_timeout(Duration::from_secs(90))
-        .user_agent("huggingface_hub/1.7.2 Sketch2Asset/0.3.0")
+        .user_agent("huggingface_hub/1.7.2 Sketch2Asset/0.3.1")
         .build()
         .map_err(|e| AppError::new(AppErrorCode::Network, format!("HTTP client init failed: {e}")))
 }
@@ -35,7 +35,7 @@ pub fn build_proxy_fallback_client() -> AppResult<reqwest::Client> {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(20))
         .read_timeout(Duration::from_secs(90))
-        .user_agent("huggingface_hub/1.7.2 Sketch2Asset/0.3.0")
+        .user_agent("huggingface_hub/1.7.2 Sketch2Asset/0.3.1")
         .build()
         .map_err(|e| AppError::new(AppErrorCode::Network, format!("HTTP client init failed: {e}")))
 }

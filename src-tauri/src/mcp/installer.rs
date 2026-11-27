@@ -92,6 +92,7 @@ If the `sketch2asset` MCP server is connected in your toolset, call these tools 
   - `size`: `"1024x1024"`, `"1536x1024"`, `"1024x1536"`, `"1920x1080"`.
   - `project`, `profile_id`, `model`: Optional overrides for project, provider profile, or model.
   - `auto_remove_bg`: Set `true` for icons, sprites, and characters to automatically run local GPU matting + 3-stage anti-halo (foreground unmixing + choke + 4px color bleed).
+  - `pixel_grid_guide` / `pixel_grid_style` / `pixel_palette_colors`: Optional micro-contrast checkerboard canvas cell count (`16`, `32`, `48`, `64`, `96`, `128`; `0` disables), style (`"chroma"` | `"neutral"`), and perceptual palette limit (`16`–`64` or `0` unlimited; omit for auto cel-shading). Auto-defaults to `64` on `pixel_sprite` for locked pixel scale & matting-free grid cutout.
   - `output_path`: Optional absolute path inside the current game repository (e.g., `D:/Game/assets/sprites/sword.png`) to save the final PNG directly.
 - `s2a_remove_background`: Run local DirectML GPU background removal on any existing image file (`input_path` -> `output_path`), with `model_id` (`"birefnet"`, `"ben2"`, `"isnet-anime"`) and `choke` (`0`..`3`).
 - `s2a_generate_character`: Generate character turnaround sheets (`"turnaround"`), outfit skinning (`"outfit"`), animation sprite sheets (`"spritesheet"`), or expression grids (`"expression"`), with optional `project`, `profile_id`, `model`, `anchor_image_path`, `size`, `auto_remove_bg`, and `output_path`.

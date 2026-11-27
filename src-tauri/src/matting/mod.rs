@@ -1,5 +1,5 @@
 use half::f16;
-use image::{ imageops::FilterType, DynamicImage, GenericImageView, ImageBuffer, Rgba, RgbaImage };
+use image::{ imageops::FilterType, DynamicImage, GenericImageView, Rgba, RgbaImage };
 use ort::{ ep, environment::Environment, session::Session, value::{ Tensor, TensorElementType, ValueType } };
 use serde::{ Deserialize, Serialize };
 use std::collections::VecDeque;
@@ -700,31 +700,396 @@ fn run_session_matte(
         }
     }
 
-    // Resize matte back to (ow, oh) using Lanczos3
-    let matte_u8: Vec<u8> = raw_matte
-        .iter()
-        .map(|&v| (v * 255.0).round().clamp(0.0, 255.0) as u8)
-        .collect();
-    let gray_img: ImageBuffer<image::Luma<u8>, Vec<u8>> =
-        ImageBuffer::from_raw(s, s, matte_u8).ok_or_else(|| {
-            AppError::new(AppErrorCode::MattingFailed, "Failed to construct matte buffer")
-        })?;
-    let resized_gray = if ow == s && oh == s {
-        gray_img
+    // Upsample matte directly in f32 via monotone bilinear interpolation (avoids u8 quantization & Lanczos3 ringing halos)
+    let final_matte = if ow == s && oh == s {
+        raw_matte
+            .into_iter()
+            .map(|a| {
+                if a < 0.006 {
+                    0.0
+                } else if a > 0.998 {
+                    1.0
+                } else {
+                    a
+                }
+            })
+            .collect()
     } else {
-        image::imageops::resize(&gray_img, ow, oh, FilterType::Lanczos3)
+        resize_f32_bilinear(&raw_matte, s as usize, s as usize, ow as usize, oh as usize)
+            .into_iter()
+            .map(|a| {
+                if a < 0.006 {
+                    0.0
+                } else if a > 0.998 {
+                    1.0
+                } else {
+                    a
+                }
+            })
+            .collect()
     };
 
-    let final_matte: Vec<f32> = resized_gray
-        .as_raw()
-        .iter()
-        .map(|&b| {
-            let a = (b as f32) / 255.0;
-            ((a - 0.03) / 0.94).clamp(0.0, 1.0)
-        })
-        .collect();
-
     Ok(final_matte)
+}
+
+fn resize_f32_bilinear(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<f32> {
+    if dw == 0 || dh == 0 {
+        return Vec::new();
+    }
+    if sw == 0 || sh == 0 || src.len() < sw * sh {
+        return vec![0.0; dw * dh];
+    }
+    let mut dst = vec![0.0_f32; dw * dh];
+    let scale_x = (sw as f32) / (dw as f32);
+    let scale_y = (sh as f32) / (dh as f32);
+
+    for dy in 0..dh {
+        let fy = ((dy as f32 + 0.5) * scale_y - 0.5).clamp(0.0, (sh - 1) as f32);
+        let y0 = fy.floor() as usize;
+        let y1 = (y0 + 1).min(sh - 1);
+        let wy = fy - (y0 as f32);
+        let row0 = y0 * sw;
+        let row1 = y1 * sw;
+        let dst_row = dy * dw;
+
+        for dx in 0..dw {
+            let fx = ((dx as f32 + 0.5) * scale_x - 0.5).clamp(0.0, (sw - 1) as f32);
+            let x0 = fx.floor() as usize;
+            let x1 = (x0 + 1).min(sw - 1);
+            let wx = fx - (x0 as f32);
+
+            let v00 = src[row0 + x0];
+            let v10 = src[row0 + x1];
+            let v01 = src[row1 + x0];
+            let v11 = src[row1 + x1];
+
+            let top = v00 + (v10 - v00) * wx;
+            let bot = v01 + (v11 - v01) * wx;
+            dst[dst_row + dx] = (top + (bot - top) * wy).clamp(0.0, 1.0);
+        }
+    }
+    dst
+}
+
+/// O(w * h) separable integral box-mean filter for Guided Image Filtering.
+fn box_mean_2d(src: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+    if r == 0 || w == 0 || h == 0 {
+        return src.to_vec();
+    }
+    let mut tmp = vec![0.0_f32; w * h];
+    let mut dst = vec![0.0_f32; w * h];
+
+    // Horizontal pass with running prefix sum
+    let mut row_prefix = vec![0.0_f64; w + 1];
+    for y in 0..h {
+        let off = y * w;
+        row_prefix[0] = 0.0;
+        for x in 0..w {
+            row_prefix[x + 1] = row_prefix[x] + (src[off + x] as f64);
+        }
+        for x in 0..w {
+            let x0 = x.saturating_sub(r);
+            let x1 = (x + r).min(w - 1);
+            let cnt = (x1 - x0 + 1) as f64;
+            tmp[off + x] = ((row_prefix[x1 + 1] - row_prefix[x0]) / cnt) as f32;
+        }
+    }
+
+    // Vertical pass with column prefix sum
+    let mut col_prefix = vec![0.0_f64; h + 1];
+    for x in 0..w {
+        col_prefix[0] = 0.0;
+        for y in 0..h {
+            col_prefix[y + 1] = col_prefix[y] + (tmp[y * w + x] as f64);
+        }
+        for y in 0..h {
+            let y0 = y.saturating_sub(r);
+            let y1 = (y + r).min(h - 1);
+            let cnt = (y1 - y0 + 1) as f64;
+            dst[y * w + x] = ((col_prefix[y1 + 1] - col_prefix[y0]) / cnt) as f32;
+        }
+    }
+    dst
+}
+
+/// He et al. Color-Guided Alpha Filter restricted to the boundary uncertainty trimap band.
+/// Snaps blurry / slightly fat neural segmentation edges strictly onto the full-resolution RGB color boundary
+/// while leaving deep opaque cores, interior highlights, and rescued VFX glow untouched.
+fn refine_alpha_boundary_guided(
+    raw_rgb: &[u8],
+    alpha_in: &[f32],
+    vfx_mask: &[bool],
+    w: usize,
+    h: usize,
+) -> Vec<f32> {
+    let n = w * h;
+    if w < 24 || h < 24 || raw_rgb.len() < n * 3 || alpha_in.len() < n {
+        return alpha_in.to_vec();
+    }
+
+    let r_box = (w.min(h) / 200).clamp(2, 5);
+    let eps = 0.0018_f32;
+
+    // Identify narrow transition trimap band (within r_box+1 px of alpha transition or soft 0.03..0.97)
+    let high_mask: Vec<bool> = alpha_in.iter().map(|&a| a >= 0.96).collect();
+    let low_mask: Vec<bool> = alpha_in.iter().map(|&a| a <= 0.04).collect();
+    let dist_to_high = manhattan_distance_map(&high_mask, w, h);
+    let dist_to_low = manhattan_distance_map(&low_mask, w, h);
+    let band_limit = (r_box as u32) + 1;
+
+    let mut has_band = false;
+    let mut in_band = vec![false; n];
+    for i in 0..n {
+        if !vfx_mask[i]
+            && ((alpha_in[i] > 0.02 && alpha_in[i] < 0.98)
+                || (dist_to_high[i] <= band_limit && dist_to_low[i] <= band_limit))
+        {
+            in_band[i] = true;
+            has_band = true;
+        }
+    }
+    if !has_band {
+        return alpha_in.to_vec();
+    }
+
+    // Diagonal 3-channel RGB Guided Filter (captures both luma and pure-chroma boundaries in O(N))
+    let mut out_q = vec![0.0_f32; n];
+    let mut weight_ch = vec![0.0_f32; n];
+    let mean_p = box_mean_2d(alpha_in, w, h, r_box);
+
+    for ch in 0..3 {
+        let guide: Vec<f32> = (0..n).map(|i| (raw_rgb[i * 3 + ch] as f32) / 255.0).collect();
+        let ip: Vec<f32> = (0..n).map(|i| guide[i] * alpha_in[i]).collect();
+        let ii: Vec<f32> = (0..n).map(|i| guide[i] * guide[i]).collect();
+
+        let mean_i = box_mean_2d(&guide, w, h, r_box);
+        let mean_ip = box_mean_2d(&ip, w, h, r_box);
+        let mean_ii = box_mean_2d(&ii, w, h, r_box);
+
+        let mut a_k = vec![0.0_f32; n];
+        let mut b_k = vec![0.0_f32; n];
+        let mut var_w = vec![0.0_f32; n];
+        for idx in 0..n {
+            let cov = mean_ip[idx] - mean_i[idx] * mean_p[idx];
+            let var = (mean_ii[idx] - mean_i[idx] * mean_i[idx]).max(0.0);
+            let a = cov / (var + eps);
+            let b = mean_p[idx] - a * mean_i[idx];
+            a_k[idx] = a;
+            b_k[idx] = b;
+            var_w[idx] = var + 1e-4;
+        }
+
+        let mean_a = box_mean_2d(&a_k, w, h, r_box);
+        let mean_b = box_mean_2d(&b_k, w, h, r_box);
+        let mean_vw = box_mean_2d(&var_w, w, h, r_box);
+
+        for idx in 0..n {
+            let w_c = mean_vw[idx];
+            let q_c = (mean_a[idx] * guide[idx] + mean_b[idx]).clamp(0.0, 1.0);
+            out_q[idx] += q_c * w_c;
+            weight_ch[idx] += w_c;
+        }
+    }
+
+    let mut refined = alpha_in.to_vec();
+    for idx in 0..n {
+        if in_band[idx] && weight_ch[idx] > 0.0 {
+            let q = (out_q[idx] / weight_ch[idx]).clamp(0.0, 1.0);
+            refined[idx] = if q < 0.015 {
+                0.0
+            } else if q > 0.992 {
+                1.0
+            } else {
+                q
+            };
+        }
+    }
+    refined
+}
+
+/// Fast Multi-Level Foreground & Background Estimation (Germer et al., PyMatting `estimate_foreground_ml`).
+/// Solves the coupled smoothness-regularized compositing equation `I = α F + (1 - α) B` on a coarse-to-fine
+/// image pyramid, simultaneously recovering halo-free foreground colors `F` across all semi-transparent
+/// hair/edge pixels AND naturally bleeding clean foreground RGB into adjacent transparent pixels.
+fn estimate_foreground_multilevel(
+    raw_rgb: &[u8],
+    alpha: &[f32],
+    w: usize,
+    h: usize,
+) -> (Vec<f32>, Vec<f32>) {
+    fn solve_level(
+        img_rgb: &[f32],
+        a_lvl: &[f32],
+        lw: usize,
+        lh: usize,
+        mut fg: Vec<f32>,
+        mut bg: Vec<f32>,
+        sweeps: usize,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let reg_base = 0.12_f32;
+        for _ in 0..sweeps {
+            for y in 0..lh {
+                let row = y * lw;
+                for x in 0..lw {
+                    let idx = row + x;
+                    let a = a_lvl[idx].clamp(0.0, 1.0);
+                    let b = 1.0 - a;
+                    let reg_f = reg_base + b * 0.28;
+                    let reg_b = reg_base + a * 0.28;
+
+                    let mut nb_cnt = 0.0_f32;
+                    let mut sf = [0.0_f32; 3];
+                    let mut sb = [0.0_f32; 3];
+
+                    if x > 0 {
+                        let ni = (idx - 1) * 3;
+                        nb_cnt += 1.0;
+                        for c in 0..3 {
+                            sf[c] += fg[ni + c];
+                            sb[c] += bg[ni + c];
+                        }
+                    }
+                    if x + 1 < lw {
+                        let ni = (idx + 1) * 3;
+                        nb_cnt += 1.0;
+                        for c in 0..3 {
+                            sf[c] += fg[ni + c];
+                            sb[c] += bg[ni + c];
+                        }
+                    }
+                    if y > 0 {
+                        let ni = (idx - lw) * 3;
+                        nb_cnt += 1.0;
+                        for c in 0..3 {
+                            sf[c] += fg[ni + c];
+                            sb[c] += bg[ni + c];
+                        }
+                    }
+                    if y + 1 < lh {
+                        let ni = (idx + lw) * 3;
+                        nb_cnt += 1.0;
+                        for c in 0..3 {
+                            sf[c] += fg[ni + c];
+                            sb[c] += bg[ni + c];
+                        }
+                    }
+
+                    let a11 = a * a + nb_cnt * reg_f;
+                    let a22 = b * b + nb_cnt * reg_b;
+                    let a12 = a * b;
+                    let det = (a11 * a22 - a12 * a12).max(1e-6);
+                    let inv_det = 1.0 / det;
+
+                    let p3 = idx * 3;
+                    for c in 0..3 {
+                        let ic = img_rgb[p3 + c];
+                        let rhs1 = a * ic + reg_f * sf[c];
+                        let rhs2 = b * ic + reg_b * sb[c];
+                        fg[p3 + c] = ((a22 * rhs1 - a12 * rhs2) * inv_det).clamp(0.0, 255.0);
+                        bg[p3 + c] = ((a11 * rhs2 - a12 * rhs1) * inv_det).clamp(0.0, 255.0);
+                    }
+                }
+            }
+        }
+        (fg, bg)
+    }
+
+    fn downsample_2x_rgb_alpha(
+        rgb: &[f32],
+        a: &[f32],
+        sw: usize,
+        sh: usize,
+    ) -> (Vec<f32>, Vec<f32>, usize, usize) {
+        let dw = (sw / 2).max(1);
+        let dh = (sh / 2).max(1);
+        let mut d_rgb = vec![0.0_f32; dw * dh * 3];
+        let mut d_a = vec![0.0_f32; dw * dh];
+        for dy in 0..dh {
+            let sy0 = (dy * 2).min(sh - 1);
+            let sy1 = (sy0 + 1).min(sh - 1);
+            for dx in 0..dw {
+                let sx0 = (dx * 2).min(sw - 1);
+                let sx1 = (sx0 + 1).min(sw - 1);
+                let idxs = [sy0 * sw + sx0, sy0 * sw + sx1, sy1 * sw + sx0, sy1 * sw + sx1];
+                let out_i = dy * dw + dx;
+                d_a[out_i] = 0.25 * (a[idxs[0]] + a[idxs[1]] + a[idxs[2]] + a[idxs[3]]);
+                for c in 0..3 {
+                    d_rgb[out_i * 3 + c] = 0.25
+                        * (rgb[idxs[0] * 3 + c]
+                            + rgb[idxs[1] * 3 + c]
+                            + rgb[idxs[2] * 3 + c]
+                            + rgb[idxs[3] * 3 + c]);
+                }
+            }
+        }
+        (d_rgb, d_a, dw, dh)
+    }
+
+    fn upsample_rgb_bilinear(src: &[f32], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<f32> {
+        let mut dst = vec![0.0_f32; dw * dh * 3];
+        let scale_x = (sw as f32) / (dw as f32);
+        let scale_y = (sh as f32) / (dh as f32);
+        for dy in 0..dh {
+            let fy = ((dy as f32 + 0.5) * scale_y - 0.5).clamp(0.0, (sh - 1) as f32);
+            let y0 = fy.floor() as usize;
+            let y1 = (y0 + 1).min(sh - 1);
+            let wy = fy - (y0 as f32);
+            for dx in 0..dw {
+                let fx = ((dx as f32 + 0.5) * scale_x - 0.5).clamp(0.0, (sw - 1) as f32);
+                let x0 = fx.floor() as usize;
+                let x1 = (x0 + 1).min(sw - 1);
+                let wx = fx - (x0 as f32);
+                let i00 = (y0 * sw + x0) * 3;
+                let i10 = (y0 * sw + x1) * 3;
+                let i01 = (y1 * sw + x0) * 3;
+                let i11 = (y1 * sw + x1) * 3;
+                let out_i = (dy * dw + dx) * 3;
+                for c in 0..3 {
+                    let top = src[i00 + c] + (src[i10 + c] - src[i00 + c]) * wx;
+                    let bot = src[i01 + c] + (src[i11 + c] - src[i01 + c]) * wx;
+                    dst[out_i + c] = top + (bot - top) * wy;
+                }
+            }
+        }
+        dst
+    }
+
+    let n = w * h;
+    let base_rgb: Vec<f32> = raw_rgb.iter().take(n * 3).map(|&v| v as f32).collect();
+    let mut levels: Vec<(Vec<f32>, Vec<f32>, usize, usize)> = vec![(base_rgb, alpha.to_vec(), w, h)];
+
+    while {
+        let (_, _, cw, ch) = levels.last().unwrap();
+        (*cw).min(*ch) > 32
+    } {
+        let (prgb, pa, cw, ch) = levels.last().unwrap();
+        let next = downsample_2x_rgb_alpha(prgb, pa, *cw, *ch);
+        levels.push(next);
+    }
+
+    let (coarsest_rgb, coarsest_a, cw, ch) = levels.last().unwrap();
+    let (mut fg, mut bg) = solve_level(
+        coarsest_rgb,
+        coarsest_a,
+        *cw,
+        *ch,
+        coarsest_rgb.clone(),
+        coarsest_rgb.clone(),
+        10,
+    );
+
+    for lvl in (0..levels.len() - 1).rev() {
+        let (_, _, pw, ph) = levels[lvl + 1];
+        let (ref l_rgb, ref l_a, nw, nh) = levels[lvl];
+        let up_fg = upsample_rgb_bilinear(&fg, pw, ph, nw, nh);
+        let up_bg = upsample_rgb_bilinear(&bg, pw, ph, nw, nh);
+        let sweeps = if nw.max(nh) >= 512 { 3 } else { 5 };
+        let solved = solve_level(l_rgb, l_a, nw, nh, up_fg, up_bg, sweeps);
+        fg = solved.0;
+        bg = solved.1;
+    }
+
+    (fg, bg)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1125,7 +1490,7 @@ pub fn compose_rgba(
         d_pc_arr[i] = (dr * dr + dg * dg + db * db).sqrt();
     }
 
-    let mut a2 = alpha_src.clone();
+    let mut a2 = refine_alpha_boundary_guided(raw_rgb, &alpha_src, &vec![false; n], w, h);
 
     // 2. Build dedicated VFX mask (90px reachability + multi-hop chromatic stroke propagation)
     let mut fg_seed: Vec<bool> = a2.iter().map(|&a| a > 0.7).collect();
@@ -1215,6 +1580,13 @@ pub fn compose_rgba(
                     vfx_mask[idx] = true;
                 }
             }
+        }
+    }
+
+    // Restore original soft neural alpha on detected VFX glow regions before rescue
+    for i in 0..n {
+        if vfx_mask[i] && alpha_src[i] > a2[i] {
+            a2[i] = alpha_src[i];
         }
     }
 
@@ -1387,9 +1759,10 @@ pub fn compose_rgba(
         }
     }
 
-    // Edge Choke (0..=5 px 4-neighbor minimum erosion on unprotected thick boundaries)
+    // Isotropic Sub-Pixel Edge Choke (0..=5 px 8-neighbor level-set erosion: eliminates 4-neighbor diamond stair-stepping)
     if choke_iters > 0 {
         let mut next_a = a2.clone();
+        let diag_step = std::f32::consts::FRAC_1_SQRT_2; // 0.70710678
         for _ in 0..choke_iters {
             next_a.copy_from_slice(&a2);
             for y in 0..h {
@@ -1399,52 +1772,132 @@ pub fn compose_rgba(
                     if thin_protect[idx] || vfx_protected[idx] {
                         continue;
                     }
-                    let mut m = a2[idx];
-                    if x > 0 && a2[idx - 1] < m {
-                        m = a2[idx - 1];
+                    let c = a2[idx];
+                    let mut m = c;
+                    if x > 0 {
+                        m = m.min(a2[idx - 1]);
                     }
-                    if x + 1 < w && a2[idx + 1] < m {
-                        m = a2[idx + 1];
+                    if x + 1 < w {
+                        m = m.min(a2[idx + 1]);
                     }
-                    if y > 0 && a2[idx - w] < m {
-                        m = a2[idx - w];
+                    if y > 0 {
+                        m = m.min(a2[idx - w]);
                     }
-                    if y + 1 < h && a2[idx + w] < m {
-                        m = a2[idx + w];
+                    if y + 1 < h {
+                        m = m.min(a2[idx + w]);
                     }
-                    next_a[idx] = m;
+                    // Diagonal neighbors scaled by 1/sqrt(2) distance for circular isotropy
+                    for (dx, dy) in [(-1_isize, -1_isize), (1, -1), (-1, 1), (1, 1)] {
+                        let nx = x as isize + dx;
+                        let ny = y as isize + dy;
+                        if nx >= 0 && nx < w as isize && ny >= 0 && ny < h as isize {
+                            let nd = a2[(ny as usize) * w + (nx as usize)];
+                            if nd < c {
+                                let diag_proj = c + (nd - c) * diag_step;
+                                m = m.min(diag_proj);
+                            }
+                        }
+                    }
+                    next_a[idx] = m.clamp(0.0, 1.0);
                 }
             }
             std::mem::swap(&mut a2, &mut next_a);
         }
     }
 
-    // 5. Foreground Color Unmixing on semi-transparent edge pixels (0.02 < a2 < 0.995)
-    let mut rgb_f32 = vec![0.0_f32; n * 3];
-    for i in 0..n {
-        let r = raw_rgb[i * 3] as f32;
-        let g = raw_rgb[i * 3 + 1] as f32;
-        let b = raw_rgb[i * 3 + 2] as f32;
-        let a = a2[i];
-        if a > 0.02 && a < 0.995 {
-            let safe_a = a.max(0.08);
-            let ur = ((r - (1.0 - a) * bgc[0]) / safe_a).clamp(0.0, 255.0);
-            let ug = ((g - (1.0 - a) * bgc[1]) / safe_a).clamp(0.0, 255.0);
-            let ub = ((b - (1.0 - a) * bgc[2]) / safe_a).clamp(0.0, 255.0);
-            let fade = (a / 0.15).clamp(0.0, 1.0);
-            rgb_f32[i * 3] = ur * fade + r * (1.0 - fade);
-            rgb_f32[i * 3 + 1] = ug * fade + g * (1.0 - fade);
-            rgb_f32[i * 3 + 2] = ub * fade + b * (1.0 - fade);
-        } else {
-            rgb_f32[i * 3] = r;
-            rgb_f32[i * 3 + 1] = g;
-            rgb_f32[i * 3 + 2] = b;
+    // 4b. Collinear Rim Decontamination: fix fat neural mask pixels (0.35 <= α <= 1.0) right on the outer border
+    // that are actually linear blends between interior foreground core and background (the #1 cause of white sticker halos!)
+    if w >= 12 && h >= 12 {
+        let snap_a = a2.clone();
+        for y in 2..h.saturating_sub(2) {
+            let row = y * w;
+            for x in 2..w.saturating_sub(2) {
+                let idx = row + x;
+                let a = snap_a[idx];
+                if a < 0.35 || vfx_mask[idx] || thin_protect[idx] {
+                    continue;
+                }
+                let touches_soft_or_out = snap_a[idx - 1] < 0.35
+                    || snap_a[idx + 1] < 0.35
+                    || snap_a[idx - w] < 0.35
+                    || snap_a[idx + w] < 0.35;
+                if !touches_soft_or_out {
+                    continue;
+                }
+
+                // Find cleanest deep core pixel (snap_a >= 0.98) within 2px inward
+                let mut core_rgb: Option<[f32; 3]> = None;
+                let mut max_bg_dist = -1.0_f32;
+                for (dx, dy) in [
+                    (-2_isize, 0_isize),
+                    (2, 0),
+                    (0, -2),
+                    (0, 2),
+                    (-2, -2),
+                    (2, -2),
+                    (-2, 2),
+                    (2, 2),
+                ] {
+                    let nx = (x as isize + dx) as usize;
+                    let ny = (y as isize + dy) as usize;
+                    let nidx = ny * w + nx;
+                    if snap_a[nidx] >= 0.98 && d_pc_arr[nidx] > max_bg_dist {
+                        max_bg_dist = d_pc_arr[nidx];
+                        core_rgb = Some([
+                            raw_rgb[nidx * 3] as f32,
+                            raw_rgb[nidx * 3 + 1] as f32,
+                            raw_rgb[nidx * 3 + 2] as f32,
+                        ]);
+                    }
+                }
+
+                if let Some(fc) = core_rgb {
+                    let vx = fc[0] - bgc[0];
+                    let vy = fc[1] - bgc[1];
+                    let vz = fc[2] - bgc[2];
+                    let seg_sq = vx * vx + vy * vy + vz * vz;
+                    if seg_sq >= 2025.0 {
+                        // |F_core - bgc| >= 45
+                        let px_r = raw_rgb[idx * 3] as f32;
+                        let px_g = raw_rgb[idx * 3 + 1] as f32;
+                        let px_b = raw_rgb[idx * 3 + 2] as f32;
+                        let wx = px_r - bgc[0];
+                        let wy = px_g - bgc[1];
+                        let wz = px_b - bgc[2];
+                        let t = (wx * vx + wy * vy + wz * vz) / seg_sq;
+                        if (0.12..=0.92).contains(&t) {
+                            let proj_r = bgc[0] + t * vx;
+                            let proj_g = bgc[1] + t * vy;
+                            let proj_b = bgc[2] + t * vz;
+                            let perp_sq = (px_r - proj_r).powi(2)
+                                + (px_g - proj_g).powi(2)
+                                + (px_b - proj_b).powi(2);
+                            if perp_sq <= seg_sq * 0.025 {
+                                a2[idx] = a.min(t);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
-    // 6. 4px Color Bleed into transparent area to prevent bilinear engine black/white fringes
+    // 5. PyMatting-style Multi-Level Foreground Estimation + Automatic Transparent Color Bleed
+    // Replaces single-pixel division & white fade-back so even α=0.04 hair tips retain pure unmixed foreground RGB!
+    let (mut rgb_f32, _bg_f32) = estimate_foreground_multilevel(raw_rgb, &a2, w, h);
+
+    // Ensure completely opaque core pixels (a2 >= 0.995) remain 100% bitwise identical to original RGB
+    for i in 0..n {
+        if a2[i] >= 0.995 {
+            rgb_f32[i * 3] = raw_rgb[i * 3] as f32;
+            rgb_f32[i * 3 + 1] = raw_rgb[i * 3 + 1] as f32;
+            rgb_f32[i * 3 + 2] = raw_rgb[i * 3 + 2] as f32;
+        }
+    }
+
+    // 6. Reinforce 4px crisp color bleed from solid rim into immediate transparent neighbors for bilinear game engines
     let mut solid: Vec<bool> = (0..n)
-        .map(|i| a2[i] > 0.6 || (vfx_mask[i] && a2[i] > 0.08))
+        .map(|i| a2[i] > 0.55 || (vfx_mask[i] && a2[i] > 0.06))
         .collect();
     let mut next_rgb = rgb_f32.clone();
     let mut next_solid = solid.clone();
@@ -1456,7 +1909,7 @@ pub fn compose_rgba(
             let row = y * w;
             for x in 0..w {
                 let idx = row + x;
-                if solid[idx] {
+                if solid[idx] || a2[idx] > 0.02 {
                     continue;
                 }
                 let mut sr = 0.0_f32;
@@ -1512,6 +1965,328 @@ pub fn compose_rgba(
         }
     }
     out_img
+}
+
+/// Detect whether an image's outer perimeter is predominantly light (`true`, e.g. #FFFFFF) or dark (`false`, e.g. #000000).
+pub fn is_light_backdrop_plate(img: &DynamicImage) -> bool {
+    let rgb = img.to_rgb8();
+    let (w, h) = rgb.dimensions();
+    if w == 0 || h == 0 {
+        return true;
+    }
+    let mut lumas = Vec::new();
+    for x in 0..w {
+        for y in [0, h.saturating_sub(1)] {
+            let p = rgb.get_pixel(x, y);
+            lumas.push(0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32);
+        }
+    }
+    for y in 0..h {
+        for x in [0, w.saturating_sub(1)] {
+            let p = rgb.get_pixel(x, y);
+            lumas.push(0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32);
+        }
+    }
+    median_f32(&mut lumas) >= 128.0
+}
+
+/// Smith-Blinn Closed-Form Dual-Background Triangulation Matting (`light_plate` + `dark_plate`).
+/// Auto-registers sub-pixel/integer translation shifts (`±6px`) caused by image-edit models, then
+/// solves the overdetermined linear system `I_W = α F + (1 - α) B_W` & `I_K = α F + (1 - α) B_K`
+/// for physically exact translucent alpha (glass, fire, smoke, lace, hair) with zero white halo.
+pub fn triangulate_dual_bg_rgba(
+    light_img: &DynamicImage,
+    dark_img: &DynamicImage,
+    choke: u8,
+) -> RgbaImage {
+    let (w_u32, h_u32) = light_img.dimensions();
+    let w = w_u32 as usize;
+    let h = h_u32 as usize;
+    if w == 0 || h == 0 {
+        return RgbaImage::new(w_u32, h_u32);
+    }
+
+    let light_rgb = light_img.to_rgb8();
+    let dark_resized = if dark_img.dimensions() == (w_u32, h_u32) {
+        dark_img.to_rgb8()
+    } else {
+        dark_img
+            .resize_exact(w_u32, h_u32, FilterType::Lanczos3)
+            .to_rgb8()
+    };
+
+    let lw_raw = light_rgb.as_raw();
+    let dk_raw = dark_resized.as_raw();
+
+    // 1. Estimate true light & dark backdrop colors from outer border median
+    let sample_border_median = |raw: &[u8]| -> [f32; 3] {
+        let mut rs = Vec::new();
+        let mut gs = Vec::new();
+        let mut bs = Vec::new();
+        let mut push = |x: usize, y: usize| {
+            let i = (y * w + x) * 3;
+            rs.push(raw[i] as f32);
+            gs.push(raw[i + 1] as f32);
+            bs.push(raw[i + 2] as f32);
+        };
+        for x in 0..w {
+            push(x, 0);
+            if h > 1 {
+                push(x, h - 1);
+            }
+        }
+        for y in 0..h {
+            push(0, y);
+            if w > 1 {
+                push(w - 1, y);
+            }
+        }
+        [median_f32(&mut rs), median_f32(&mut gs), median_f32(&mut bs)]
+    };
+
+    let bw_col = sample_border_median(lw_raw);
+    let bk_col = sample_border_median(dk_raw);
+
+    // 2. Align integer translation shift (dx, dy) in [-6..=6] via interior gradient correlation
+    let (best_dx, best_dy) = if w >= 32 && h >= 32 {
+        let step = (w.min(h) / 256).max(1);
+        let x0 = w / 8;
+        let x1 = w - x0;
+        let y0 = h / 8;
+        let y1 = h - y0;
+        let mut best_shift = (0_isize, 0_isize);
+        let mut min_err = f64::INFINITY;
+
+        for dy in -6_isize..=6 {
+            for dx in -6_isize..=6 {
+                let mut err_sum = 0.0_f64;
+                let mut count = 0_usize;
+                let mut y = y0;
+                while y + 1 < y1 {
+                    let ny = (y as isize + dy).clamp(0, (h - 2) as isize) as usize;
+                    let mut x = x0;
+                    while x + 1 < x1 {
+                        let nx = (x as isize + dx).clamp(0, (w - 2) as isize) as usize;
+                        let il = (y * w + x) * 3;
+                        let ik = (ny * w + nx) * 3;
+                        // Compare interior horizontal & vertical spatial derivatives (invariant to constant background where foreground is solid!)
+                        let d_lw = (lw_raw[il] as f32 - bw_col[0]).abs()
+                            + (lw_raw[il + 1] as f32 - bw_col[1]).abs()
+                            + (lw_raw[il + 2] as f32 - bw_col[2]).abs();
+                        if d_lw > 36.0 {
+                            let glx = (lw_raw[il + 3] as i32 - lw_raw[il] as i32).abs();
+                            let gkx = (dk_raw[ik + 3] as i32 - dk_raw[ik] as i32).abs();
+                            let gly = (lw_raw[il + w * 3] as i32 - lw_raw[il] as i32).abs();
+                            let gky = (dk_raw[ik + w * 3] as i32 - dk_raw[ik] as i32).abs();
+                            err_sum += ((glx - gkx).abs() + (gly - gky).abs()) as f64;
+                            count += 1;
+                        }
+                        x += step;
+                    }
+                    y += step;
+                }
+                if count >= 16 {
+                    // Slight preference for (0,0) when tied
+                    let reg = ((dx.abs() + dy.abs()) as f64) * 0.15;
+                    let avg_err = err_sum / (count as f64) + reg;
+                    if avg_err < min_err {
+                        min_err = avg_err;
+                        best_shift = (dx, dy);
+                    }
+                }
+            }
+        }
+        best_shift
+    } else {
+        (0, 0)
+    };
+
+    // 3. Smith-Blinn closed-form least-squares alpha & un-premultiplied foreground recovery
+    let db_r = (bw_col[0] - bk_col[0]).max(40.0);
+    let db_g = (bw_col[1] - bk_col[1]).max(40.0);
+    let db_b = (bw_col[2] - bk_col[2]).max(40.0);
+    let db_norm_sq = db_r * db_r + db_g * db_g + db_b * db_b;
+
+    let n = w * h;
+    let mut alpha = vec![0.0_f32; n];
+    let mut fg_rgb = vec![0.0_f32; n * 3];
+
+    for y in 0..h {
+        let ny = (y as isize + best_dy).clamp(0, (h - 1) as isize) as usize;
+        for x in 0..w {
+            let nx = (x as isize + best_dx).clamp(0, (w - 1) as isize) as usize;
+            let idx = y * w + x;
+            let il = idx * 3;
+            let ik = (ny * w + nx) * 3;
+
+            let wr = lw_raw[il] as f32;
+            let wg = lw_raw[il + 1] as f32;
+            let wb = lw_raw[il + 2] as f32;
+
+            let kr = dk_raw[ik] as f32;
+            let kg = dk_raw[ik + 1] as f32;
+            let kb = dk_raw[ik + 2] as f32;
+
+            // Difference vector ΔI = I_W - I_K projected onto ΔB = B_W - B_K
+            let di_r = wr - kr;
+            let di_g = wg - kg;
+            let di_b = wb - kb;
+            let dot = di_r * db_r + di_g * db_g + di_b * db_b;
+            let mut a = (1.0 - dot / db_norm_sq).clamp(0.0, 1.0);
+
+            // Additive luminous glow rescue: if pixel on dark plate glows brightly even where I_W saturated to 255
+            let dist_k_bg =
+                ((kr - bk_col[0]).powi(2) + (kg - bk_col[1]).powi(2) + (kb - bk_col[2]).powi(2))
+                    .sqrt();
+            let dist_w_bg =
+                ((wr - bw_col[0]).powi(2) + (wg - bw_col[1]).powi(2) + (wb - bw_col[2]).powi(2))
+                    .sqrt();
+
+            if dist_k_bg < 14.0 && dist_w_bg < 14.0 {
+                a = 0.0;
+            } else if a > 0.94 && dist_k_bg > 26.0 && dist_w_bg > 26.0 {
+                a = 1.0;
+            } else if a < 0.025 {
+                a = 0.0;
+            }
+
+            alpha[idx] = a;
+
+            if a >= 0.96 {
+                // Opaque core: keep original light-plate RGB for 100% fidelity to user's original art
+                fg_rgb[il] = wr;
+                fg_rgb[il + 1] = wg;
+                fg_rgb[il + 2] = wb;
+            } else if a > 0.0 {
+                // Translucent / edge pixel: unmix directly from the dark plate (ZERO white halo contamination!)
+                let denom = a.max(0.06);
+                let ur = ((kr - (1.0 - a) * bk_col[0]) / denom).clamp(0.0, 255.0);
+                let ug = ((kg - (1.0 - a) * bk_col[1]) / denom).clamp(0.0, 255.0);
+                let ub = ((kb - (1.0 - a) * bk_col[2]) / denom).clamp(0.0, 255.0);
+                let w_orig = ((a - 0.80) / 0.16).clamp(0.0, 1.0);
+                fg_rgb[il] = ur * (1.0 - w_orig) + wr * w_orig;
+                fg_rgb[il + 1] = ug * (1.0 - w_orig) + wg * w_orig;
+                fg_rgb[il + 2] = ub * (1.0 - w_orig) + wb * w_orig;
+            }
+        }
+    }
+
+    // Optional isotropic choke if requested
+    let choke_iters = choke.min(5) as usize;
+    if choke_iters > 0 {
+        let diag_step = std::f32::consts::FRAC_1_SQRT_2;
+        let mut next_a = alpha.clone();
+        for _ in 0..choke_iters {
+            next_a.copy_from_slice(&alpha);
+            for y in 0..h {
+                let row = y * w;
+                for x in 0..w {
+                    let idx = row + x;
+                    let c = alpha[idx];
+                    if c <= 0.0 || c < 0.82 {
+                        // Preserve genuine semi-transparent glass/smoke/glow! Only choke hard edges.
+                        continue;
+                    }
+                    let mut m = c;
+                    if x > 0 {
+                        m = m.min(alpha[idx - 1]);
+                    }
+                    if x + 1 < w {
+                        m = m.min(alpha[idx + 1]);
+                    }
+                    if y > 0 {
+                        m = m.min(alpha[idx - w]);
+                    }
+                    if y + 1 < h {
+                        m = m.min(alpha[idx + w]);
+                    }
+                    for (dx, dy) in [(-1_isize, -1_isize), (1, -1), (-1, 1), (1, 1)] {
+                        let nx = x as isize + dx;
+                        let ny = y as isize + dy;
+                        if nx >= 0 && nx < w as isize && ny >= 0 && ny < h as isize {
+                            let nd = alpha[(ny as usize) * w + (nx as usize)];
+                            if nd < c {
+                                m = m.min(c + (nd - c) * diag_step);
+                            }
+                        }
+                    }
+                    next_a[idx] = m.clamp(0.0, 1.0);
+                }
+            }
+            std::mem::swap(&mut alpha, &mut next_a);
+        }
+    }
+
+    // 4px engine color bleed into transparent pixels
+    let mut solid: Vec<bool> = alpha.iter().map(|&a| a > 0.05).collect();
+    let mut next_rgb = fg_rgb.clone();
+    let mut next_solid = solid.clone();
+    for _ in 0..4 {
+        next_rgb.copy_from_slice(&fg_rgb);
+        next_solid.copy_from_slice(&solid);
+        for y in 0..h {
+            let row = y * w;
+            for x in 0..w {
+                let idx = row + x;
+                if solid[idx] {
+                    continue;
+                }
+                let mut sr = 0.0;
+                let mut sg = 0.0;
+                let mut sb = 0.0;
+                let mut wt = 0.0;
+                for dy in -1_isize..=1 {
+                    let ny = y as isize + dy;
+                    if ny < 0 || ny >= h as isize {
+                        continue;
+                    }
+                    for dx in -1_isize..=1 {
+                        if dx == 0 && dy == 0 {
+                            continue;
+                        }
+                        let nx = x as isize + dx;
+                        if nx < 0 || nx >= w as isize {
+                            continue;
+                        }
+                        let nidx = (ny as usize) * w + (nx as usize);
+                        if solid[nidx] {
+                            let w_nb = if dx == 0 || dy == 0 { 1.0 } else { 0.7 };
+                            sr += fg_rgb[nidx * 3] * w_nb;
+                            sg += fg_rgb[nidx * 3 + 1] * w_nb;
+                            sb += fg_rgb[nidx * 3 + 2] * w_nb;
+                            wt += w_nb;
+                        }
+                    }
+                }
+                if wt > 0.0 {
+                    next_rgb[idx * 3] = sr / wt;
+                    next_rgb[idx * 3 + 1] = sg / wt;
+                    next_rgb[idx * 3 + 2] = sb / wt;
+                    next_solid[idx] = true;
+                }
+            }
+        }
+        std::mem::swap(&mut fg_rgb, &mut next_rgb);
+        std::mem::swap(&mut solid, &mut next_solid);
+    }
+
+    let mut out = RgbaImage::new(w_u32, h_u32);
+    for y in 0..h {
+        for x in 0..w {
+            let idx = y * w + x;
+            out.put_pixel(
+                x as u32,
+                y as u32,
+                Rgba([
+                    fg_rgb[idx * 3].round().clamp(0.0, 255.0) as u8,
+                    fg_rgb[idx * 3 + 1].round().clamp(0.0, 255.0) as u8,
+                    fg_rgb[idx * 3 + 2].round().clamp(0.0, 255.0) as u8,
+                    (alpha[idx] * 255.0).round().clamp(0.0, 255.0) as u8,
+                ]),
+            );
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1826,5 +2601,99 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_fat_mask_halo_decontamination_and_dual_plate_triangulation() {
+        // Part A: Fat neural mask (alpha=1.0 on a 50% dark-hair / 50% white-bg anti-aliased edge pixel)
+        let mut rgb = RgbImage::from_pixel(40, 40, Rgb([255, 255, 255]));
+        let mut alpha = vec![0.0_f32; 40 * 40];
+        for y in 10..30 {
+            for x in 10..30 {
+                let is_aa_rim = x == 10 || x == 29 || y == 10 || y == 29;
+                if is_aa_rim {
+                    // 50% blend of dark navy [20, 30, 50] and white [255, 255, 255] = [138, 143, 153]
+                    rgb.put_pixel(x, y, Rgb([138, 143, 153]));
+                    alpha[(y * 40 + x) as usize] = 1.0; // Fat binary mask bug!
+                } else {
+                    rgb.put_pixel(x, y, Rgb([20, 30, 50]));
+                    alpha[(y * 40 + x) as usize] = 1.0;
+                }
+            }
+        }
+        let res = compose_rgba(&DynamicImage::ImageRgb8(rgb), &alpha, false, 0);
+        // Guided filter + Collinear rim decontamination must drop the fat 1.0 rim alpha below 185 AND recover dark RGB!
+        let rim_px = res.get_pixel(10, 20);
+        assert!(
+            rim_px[3] < 185,
+            "Fat mask white-contaminated rim stayed opaque: {:?}",
+            rim_px
+        );
+        assert!(
+            rim_px[0] < 90 && rim_px[1] < 100,
+            "Multi-level foreground estimation failed to strip white halo from rim RGB: {:?}",
+            rim_px
+        );
+
+        // Part B: Smith-Blinn Dual-Plate Triangulation with a +2px horizontal shift on the dark plate!
+        // Includes: 100% opaque pure-white hair [252,252,255], 40% translucent cyan glass potion [60,210,245], and pure backdrop
+        let mut plate_w = RgbImage::from_pixel(48, 48, Rgb([255, 255, 255]));
+        let mut plate_k = RgbImage::from_pixel(48, 48, Rgb([0, 0, 0]));
+        let shift_x = 2_u32;
+
+        // Opaque dark outline + pure white hair (x=12..22, y=12..24)
+        for y in 12..24 {
+            for x in 12..22 {
+                let c = if x == 12 || x == 21 || y == 12 || y == 23 {
+                    [28, 32, 42]
+                } else {
+                    [252, 252, 255]
+                };
+                plate_w.put_pixel(x, y, Rgb(c));
+                plate_k.put_pixel(x + shift_x, y, Rgb(c));
+            }
+        }
+        // 40% translucent cyan glass potion (x=26..36, y=14..28), true F=[50, 200, 240], alpha=0.40
+        for y in 14..28 {
+            for x in 26..36 {
+                let a = 0.40_f32;
+                let f = [50.0_f32, 200.0, 240.0];
+                let cw = [
+                    (a * f[0] + (1.0 - a) * 255.0).round() as u8,
+                    (a * f[1] + (1.0 - a) * 255.0).round() as u8,
+                    (a * f[2] + (1.0 - a) * 255.0).round() as u8,
+                ];
+                let ck = [
+                    (a * f[0]).round() as u8,
+                    (a * f[1]).round() as u8,
+                    (a * f[2]).round() as u8,
+                ];
+                plate_w.put_pixel(x, y, Rgb(cw));
+                plate_k.put_pixel(x + shift_x, y, Rgb(ck));
+            }
+        }
+
+        let tri = triangulate_dual_bg_rgba(
+            &DynamicImage::ImageRgb8(plate_w),
+            &DynamicImage::ImageRgb8(plate_k),
+            0,
+        );
+        // White hair must remain 100% opaque white!
+        let hair = tri.get_pixel(16, 18);
+        assert!(hair[3] >= 250 && hair[0] >= 245, "White hair lost: {:?}", hair);
+        // 40% cyan glass must recover alpha ~102 (40% of 255) and unmixed cyan RGB [~50, ~200, ~240] (NOT white-tinted [173, 233, 249]!)
+        let glass = tri.get_pixel(30, 20);
+        assert!(
+            (glass[3] as i32 - 102).abs() <= 10,
+            "Expected ~40% alpha (102), got {:?}",
+            glass
+        );
+        assert!(
+            glass[0] < 80 && glass[2] > 215,
+            "Glass RGB still contaminated with white: {:?}",
+            glass
+        );
+        // Background stays 0 alpha
+        assert_eq!(tri.get_pixel(4, 4)[3], 0);
     }
 }

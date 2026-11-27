@@ -130,20 +130,51 @@ fn map_transport_error(
     )
 }
 
-fn extract_upstream_error_message(raw_body: &str) -> String {
-    let mut msg = raw_body.trim().to_string();
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(raw_body) {
-        if let Some(err) = val.get("error") {
-            if let Some(m) = err.get("message").and_then(|v| v.as_str()) {
-                msg = m.to_string();
-            } else if let Some(s) = err.as_str() {
-                msg = s.to_string();
+fn extract_error_from_json_value(val: &serde_json::Value) -> Option<String> {
+    if let Some(arr) = val.as_array() {
+        for item in arr {
+            if let Some(found) = extract_error_from_json_value(item) {
+                return Some(found);
             }
-        } else if let Some(m) = val.get("message").and_then(|v| v.as_str()) {
-            msg = m.to_string();
+        }
+        return None;
+    }
+    if let Some(err) = val.get("error") {
+        if let Some(m) = err.get("message").and_then(|v| v.as_str()) {
+            let status = err.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            let code = err
+                .get("code")
+                .and_then(|v| v.as_str().map(|s| s.to_string()).or_else(|| v.as_i64().map(|n| n.to_string())))
+                .unwrap_or_default();
+            let prefix = match (code.is_empty(), status.is_empty()) {
+                (false, false) => format!("[{} {}] ", code, status),
+                (false, true) => format!("[{}] ", code),
+                (true, false) => format!("[{}] ", status),
+                (true, true) => String::new(),
+            };
+            return Some(format!("{}{}", prefix, m));
+        }
+        if let Some(s) = err.as_str() {
+            return Some(s.to_string());
         }
     }
-    msg
+    if let Some(m) = val.get("message").and_then(|v| v.as_str()) {
+        return Some(m.to_string());
+    }
+    if let Some(d) = val.get("detail").and_then(|v| v.as_str()) {
+        return Some(d.to_string());
+    }
+    None
+}
+
+fn extract_upstream_error_message(raw_body: &str) -> String {
+    let trimmed = raw_body.trim();
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Some(extracted) = extract_error_from_json_value(&val) {
+            return extracted;
+        }
+    }
+    trimmed.to_string()
 }
 
 fn map_upstream_error_with_endpoint(
@@ -328,6 +359,180 @@ where
         build_req,
     )
     .await
+}
+
+pub fn is_google_generativelanguage_base(api_base: &str) -> bool {
+    let lower = api_base.trim().to_ascii_lowercase();
+    lower.contains("generativelanguage.googleapis.com")
+}
+
+fn build_google_native_v1beta_base(api_base: &str) -> AppResult<String> {
+    let mut u = api_base.trim().trim_end_matches('/').to_string();
+    if u.is_empty() {
+        return Err(AppError::new(
+            AppErrorCode::InvalidInput,
+            "API Base URL is empty",
+        ));
+    }
+    if !u.starts_with("http://") && !u.starts_with("https://") {
+        u = format!("https://{}", u);
+    }
+    for suffix in [
+        "/chat/completions",
+        "/images/generations",
+        "/images/edits",
+        "/models",
+        "/openai/v1",
+        "/openai",
+        "/v1",
+    ] {
+        if u.ends_with(suffix) {
+            u.truncate(u.len() - suffix.len());
+            u = u.trim_end_matches('/').to_string();
+        }
+    }
+    if !u.ends_with("/v1beta") && !u.ends_with("/v1alpha") {
+        u = format!("{}/v1beta", u);
+    }
+    Ok(u)
+}
+
+/// Native Google Gemini `:generateContent` multimodal image generation & image editing.
+/// Bypasses Google's broken `/v1beta/openai/chat/completions` translation wrapper (which throws
+/// `HTTP 400 Unhandled generated data mime type` *after* the Gemini/Nano-Banana model already generated the image!).
+pub async fn generate_via_google_native(
+    client: &reqwest::Client,
+    api_base: &str,
+    api_key: &str,
+    model: &str,
+    prompt: &str,
+    images: &[(&[u8], &str)],
+) -> AppResult<(Vec<u8>, String)> {
+    let v1beta = build_google_native_v1beta_base(api_base)?;
+    let clean_model = model
+        .trim()
+        .trim_start_matches("models/")
+        .trim_end_matches(":generateContent");
+    if clean_model.is_empty() {
+        return Err(AppError::new(
+            AppErrorCode::InvalidInput,
+            "Model ID is empty",
+        ));
+    }
+    let url = format!("{}/models/{}:generateContent", v1beta, clean_model);
+
+    let mut parts = vec![serde_json::json!({ "text": prompt })];
+    for (bytes, mime) in images {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+        parts.push(serde_json::json!({
+            "inlineData": {
+                "mimeType": if mime.trim().is_empty() { "image/png" } else { mime.trim() },
+                "data": b64
+            }
+        }));
+    }
+
+    let mut body = serde_json::json!({
+        "contents": [{
+            "role": "user",
+            "parts": parts
+        }],
+        "generationConfig": {
+            "responseModalities": ["TEXT", "IMAGE"]
+        }
+    });
+
+    let mut resp = {
+        let body_ref = &body;
+        send_with_retry("gemini:generateContent", &url, false, || {
+            Ok(client
+                .post(&url)
+                .header(reqwest::header::ACCEPT, "application/json")
+                .header("x-goog-api-key", api_key.trim())
+                .json(body_ref))
+        })
+        .await?
+    };
+
+    // Fallback to ["IMAGE"] only if a specialized image-only model rejects "TEXT" modality
+    if resp.status == reqwest::StatusCode::BAD_REQUEST {
+        body["generationConfig"]["responseModalities"] = serde_json::json!(["IMAGE"]);
+        let body_ref = &body;
+        resp = send_with_retry("gemini:generateContent", &url, false, || {
+            Ok(client
+                .post(&url)
+                .header(reqwest::header::ACCEPT, "application/json")
+                .header("x-goog-api-key", api_key.trim())
+                .json(body_ref))
+        })
+        .await?;
+    }
+
+    let text = resp.text_lossy();
+    if !resp.status.is_success() {
+        return Err(map_upstream_error_with_endpoint(
+            "gemini:generateContent",
+            resp.attempts,
+            DEFAULT_MAX_ATTEMPTS,
+            resp.status,
+            &text,
+        ));
+    }
+
+    let val: serde_json::Value = serde_json::from_str(&text).map_err(|_| {
+        AppError::with_details(
+            AppErrorCode::ProviderBadResponse,
+            "Upstream Gemini response is not valid JSON",
+            &text,
+        )
+    })?;
+
+    if let Some(bytes) = extract_image_from_gemini_candidates(&val) {
+        return Ok((bytes, "gemini:generateContent".to_string()));
+    }
+
+    let reason = val
+        .get("candidates")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|c0| c0.get("finishReason"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("NO_IMAGE_PART");
+
+    Err(AppError::with_details(
+        AppErrorCode::ProviderBadResponse,
+        format!(
+            "Gemini generateContent returned no image part (finishReason: {})",
+            reason
+        ),
+        &text,
+    ))
+}
+
+fn extract_image_from_gemini_candidates(val: &serde_json::Value) -> Option<Vec<u8>> {
+    let candidates = val.get("candidates")?.as_array()?;
+    for cand in candidates {
+        let Some(parts) = cand
+            .get("content")
+            .and_then(|c| c.get("parts"))
+            .and_then(|p| p.as_array())
+        else {
+            continue;
+        };
+        for part in parts {
+            let inline = part.get("inlineData").or_else(|| part.get("inline_data"));
+            if let Some(inl) = inline {
+                if let Some(b64) = inl.get("data").and_then(|d| d.as_str()) {
+                    if let Ok(bytes) = decode_base64_image(b64) {
+                        if !bytes.is_empty() {
+                            return Some(bytes);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 pub fn normalize_base_url(raw: &str) -> AppResult<String> {
@@ -662,6 +867,16 @@ async fn generate_via_images_inner(
     max_attempts: usize,
     retry_delays_ms: &[u64],
 ) -> AppResult<(Vec<u8>, String)> {
+    if is_google_generativelanguage_base(api_base)
+        && !model.to_ascii_lowercase().contains("imagen")
+    {
+        let mut imgs: Vec<(&[u8], &str)> = Vec::new();
+        if let Some((ref b, ref m)) = sketch_bytes {
+            imgs.push((b.as_slice(), m.as_str()));
+        }
+        return generate_via_google_native(client, api_base, api_key, model, prompt, &imgs).await;
+    }
+
     let base = normalize_base_url(api_base)?;
     if let Some((bytes, mime)) = sketch_bytes {
         let ext = match mime.as_str() {
@@ -740,6 +955,200 @@ pub async fn generate_via_images(
         &DEFAULT_RETRY_DELAYS_MS,
     )
     .await
+}
+
+/// Generate an image guided by an exact micro-contrast checkerboard pixel grid canvas.
+/// Routes across ComfyUI, Chat Completions, and Images Edits (dual-image or single-image),
+/// falling back cleanly to text-only `fallback_text_prompt` if a pure text model rejects image inputs.
+pub async fn generate_with_grid_guide(
+    client: &reqwest::Client,
+    api_mode: &str,
+    api_base: &str,
+    api_key: &str,
+    model: &str,
+    guided_prompt: &str,
+    fallback_text_prompt: &str,
+    negative_prompt: &str,
+    size: &str,
+    user_sketch: Option<(Vec<u8>, String)>,
+    grid_guide_png: Vec<u8>,
+    comfy_cfg: Option<&comfyui::ComfyWorkflowConfig>,
+) -> AppResult<(Vec<u8>, String)> {
+    let guide_tuple = (grid_guide_png.clone(), "image/png".to_string());
+    if api_mode == "comfyui" {
+        return comfyui::generate_via_comfyui(
+            client,
+            api_base,
+            if api_key.is_empty() { None } else { Some(api_key) },
+            model,
+            guided_prompt,
+            negative_prompt,
+            size,
+            user_sketch.or_else(|| Some(guide_tuple.clone())),
+            Some(guide_tuple),
+            comfy_cfg,
+        )
+        .await;
+    }
+
+    if is_google_generativelanguage_base(api_base) {
+        let mut imgs: Vec<(&[u8], &str)> = Vec::new();
+        if let Some((ref sb, ref sm)) = user_sketch {
+            imgs.push((sb.as_slice(), sm.as_str()));
+        }
+        imgs.push((grid_guide_png.as_slice(), "image/png"));
+        return generate_via_google_native(client, api_base, api_key, model, guided_prompt, &imgs)
+            .await
+            .map(|(b, ep)| (b, format!("{} (grid-canvas)", ep)));
+    }
+
+    if api_mode == "chat" {
+        let res = if let Some(sketch) = user_sketch.clone() {
+            edit_regions_via_chat(
+                client,
+                api_base,
+                api_key,
+                model,
+                guided_prompt,
+                sketch,
+                Some(guide_tuple),
+            )
+            .await
+        } else {
+            generate_via_chat(
+                client,
+                api_base,
+                api_key,
+                model,
+                guided_prompt,
+                Some(guide_tuple),
+            )
+            .await
+        };
+        return match res {
+            Ok((b, ep)) => Ok((b, format!("{} (grid-canvas)", ep))),
+            Err(err)
+                if user_sketch.is_none()
+                    && !matches!(
+                        err.code,
+                        AppErrorCode::ProviderAuth
+                            | AppErrorCode::ProviderRateLimited
+                            | AppErrorCode::MissingApiKey
+                    ) =>
+            {
+                eprintln!(
+                    "[providers] chat grid-canvas input rejected, falling back to text-only chat: {}",
+                    err.message
+                );
+                generate_via_chat(client, api_base, api_key, model, fallback_text_prompt, None)
+                    .await
+                    .map(|(b, ep)| (b, format!("{} (grid-fallback)", ep)))
+            }
+            Err(err) => Err(err),
+        };
+    }
+
+    let base = normalize_base_url(api_base)?;
+    if let Some(sketch) = user_sketch {
+        let url = format!("{}/images/edits", base);
+        let sketch_filename = match sketch.1.as_str() {
+            "image/jpeg" => "reference.jpg",
+            "image/webp" => "reference.webp",
+            _ => "reference.png",
+        };
+        match execute_images_request_with_size_fallback(
+            client,
+            "images/edits (grid-dual)",
+            &url,
+            size,
+            DEFAULT_MAX_ATTEMPTS,
+            &DEFAULT_RETRY_DELAYS_MS,
+            |sz| {
+                let form = build_multipart_multi_image_edit_form(
+                    model,
+                    guided_prompt,
+                    sz,
+                    &[
+                        (&sketch.0, &sketch.1, sketch_filename),
+                        (&grid_guide_png, "image/png", "pixel_grid_canvas.png"),
+                    ],
+                )?;
+                Ok(client
+                    .post(&url)
+                    .header(reqwest::header::ACCEPT, "application/json")
+                    .bearer_auth(api_key.trim())
+                    .multipart(form))
+            },
+        )
+        .await
+        {
+            Ok(ok) => return Ok(ok),
+            Err(err)
+                if !matches!(
+                    err.code,
+                    AppErrorCode::ProviderAuth
+                        | AppErrorCode::ProviderRateLimited
+                        | AppErrorCode::MissingApiKey
+                ) =>
+            {
+                eprintln!(
+                    "[providers] dual-image grid edit unsupported, falling back to sketch-only edit: {}",
+                    err.message
+                );
+                return generate_via_images(
+                    client,
+                    api_base,
+                    api_key,
+                    model,
+                    fallback_text_prompt,
+                    size,
+                    Some(sketch),
+                )
+                .await
+                .map(|(b, _)| (b, "images/edits (grid-fallback)".to_string()));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    match generate_via_images(
+        client,
+        api_base,
+        api_key,
+        model,
+        guided_prompt,
+        size,
+        Some(guide_tuple),
+    )
+    .await
+    {
+        Ok((b, ep)) => Ok((b, format!("{} (grid-canvas)", ep))),
+        Err(err)
+            if !matches!(
+                err.code,
+                AppErrorCode::ProviderAuth
+                    | AppErrorCode::ProviderRateLimited
+                    | AppErrorCode::MissingApiKey
+            ) =>
+        {
+            eprintln!(
+                "[providers] /images/edits unsupported for grid canvas, falling back to text generation: {}",
+                err.message
+            );
+            let (b, ep) = generate_via_images(
+                client,
+                api_base,
+                api_key,
+                model,
+                fallback_text_prompt,
+                size,
+                None,
+            )
+            .await?;
+            Ok((b, format!("{} (grid-fallback)", ep)))
+        }
+        Err(err) => Err(err),
+    }
 }
 
 async fn extract_image_bytes_from_images_resp(
@@ -822,6 +1231,14 @@ pub async fn generate_via_chat(
     prompt: &str,
     sketch_bytes: Option<(Vec<u8>, String)>,
 ) -> AppResult<(Vec<u8>, String)> {
+    if is_google_generativelanguage_base(api_base) {
+        let mut imgs: Vec<(&[u8], &str)> = Vec::new();
+        if let Some((ref b, ref m)) = sketch_bytes {
+            imgs.push((b.as_slice(), m.as_str()));
+        }
+        return generate_via_google_native(client, api_base, api_key, model, prompt, &imgs).await;
+    }
+
     let base = normalize_base_url(api_base)?;
     let mut parts = vec![serde_json::json!({
         "type": "text",
@@ -884,6 +1301,17 @@ pub async fn edit_regions_via_chat(
     original_bytes: (Vec<u8>, String),
     guide_bytes: Option<(Vec<u8>, String)>,
 ) -> AppResult<(Vec<u8>, String)> {
+    if is_google_generativelanguage_base(api_base) {
+        let mut imgs: Vec<(&[u8], &str)> =
+            vec![(original_bytes.0.as_slice(), original_bytes.1.as_str())];
+        if let Some((ref gb, ref gm)) = guide_bytes {
+            imgs.push((gb.as_slice(), gm.as_str()));
+        }
+        return generate_via_google_native(client, api_base, api_key, model, prompt, &imgs)
+            .await
+            .map(|(b, _)| (b, "gemini:generateContent (region-guide)".to_string()));
+    }
+
     let base = normalize_base_url(api_base)?;
     let orig_b64 = base64::engine::general_purpose::STANDARD.encode(&original_bytes.0);
     let orig_data_url = format!("data:{};base64,{}", original_bytes.1, orig_b64);
@@ -1121,6 +1549,11 @@ async fn extract_image_from_chat_json(
     client: &reqwest::Client,
     val: &serde_json::Value,
 ) -> Option<Vec<u8>> {
+    // Also support proxies returning raw Gemini candidates[] format on /chat/completions
+    if let Some(bytes) = extract_image_from_gemini_candidates(val) {
+        return Some(bytes);
+    }
+
     let msg = val.get("choices")?.as_array()?.first()?.get("message")?;
 
     if let Some(images) = msg.get("images").and_then(|v| v.as_array()) {
@@ -1131,6 +1564,7 @@ async fn extract_image_from_chat_json(
                 .and_then(|v| v.as_str())
                 .or_else(|| im.get("url").and_then(|v| v.as_str()))
                 .or_else(|| im.get("b64_json").and_then(|v| v.as_str()))
+                .or_else(|| im.get("data").and_then(|v| v.as_str()))
                 .or_else(|| im.as_str());
             if let Some(s) = candidate {
                 if let Ok(b) = resolve_url_or_b64(client, s).await {
@@ -1140,16 +1574,37 @@ async fn extract_image_from_chat_json(
         }
     }
 
+    if let Some(parts) = msg.get("parts").and_then(|v| v.as_array()) {
+        for part in parts {
+            if let Some(inl) = part.get("inlineData").or_else(|| part.get("inline_data")) {
+                if let Some(b64) = inl.get("data").and_then(|v| v.as_str()) {
+                    if let Ok(b) = decode_base64_image(b64) {
+                        return Some(b);
+                    }
+                }
+            }
+        }
+    }
+
     let mut text_segments = Vec::new();
     if let Some(arr) = msg.get("content").and_then(|v| v.as_array()) {
         for part in arr {
+            if let Some(inl) = part.get("inlineData").or_else(|| part.get("inline_data")) {
+                if let Some(b64) = inl.get("data").and_then(|v| v.as_str()) {
+                    if let Ok(b) = decode_base64_image(b64) {
+                        return Some(b);
+                    }
+                }
+            }
             let ptype = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
             if matches!(ptype, "image_url" | "image" | "output_image") {
                 let candidate = part
                     .get("image_url")
-                    .and_then(|iu| iu.get("url"))
+                    .and_then(|iu| iu.get("url").or_else(|| iu.get("b64_json")))
                     .and_then(|v| v.as_str())
-                    .or_else(|| part.get("url").and_then(|v| v.as_str()));
+                    .or_else(|| part.get("url").and_then(|v| v.as_str()))
+                    .or_else(|| part.get("b64_json").and_then(|v| v.as_str()))
+                    .or_else(|| part.get("data").and_then(|v| v.as_str()));
                 if let Some(s) = candidate {
                     if let Ok(b) = resolve_url_or_b64(client, s).await {
                         return Some(b);
@@ -1167,13 +1622,16 @@ async fn extract_image_from_chat_json(
 
     let full_text = text_segments.join("\n");
     if !full_text.is_empty() {
+        // Allow optional whitespace/newlines inside base64 data URIs
         if let Ok(re_data) =
-            regex::Regex::new(r"data:image/[a-zA-Z0-9.+-]+;base64,([A-Za-z0-9+/=]+)")
+            regex::Regex::new(r"data:image/[a-zA-Z0-9.+-]+;base64,([A-Za-z0-9+/=\r\n]+)")
         {
             if let Some(caps) = re_data.captures(&full_text) {
                 if let Some(b64) = caps.get(1) {
                     if let Ok(bytes) = decode_base64_image(b64.as_str()) {
-                        return Some(bytes);
+                        if !bytes.is_empty() {
+                            return Some(bytes);
+                        }
                     }
                 }
             }
@@ -1508,6 +1966,70 @@ mod tests {
         assert_eq!(reqs.len(), 2);
         assert!(reqs[0].contains("1920x1080"));
         assert!(reqs[1].contains("1536x1024"));
+        srv.abort();
+    }
+
+    #[tokio::test]
+    async fn test_google_native_v1beta_routing_and_array_error_parsing() {
+        assert_eq!(
+            build_google_native_v1beta_base("https://generativelanguage.googleapis.com/v1beta/openai/").unwrap(),
+            "https://generativelanguage.googleapis.com/v1beta"
+        );
+        assert_eq!(
+            build_google_native_v1beta_base("https://generativelanguage.googleapis.com").unwrap(),
+            "https://generativelanguage.googleapis.com/v1beta"
+        );
+
+        let arr_err = r#"[{"error":{"code":400,"message":"Unhandled generated data mime type: image/jpeg","status":"INVALID_ARGUMENT"}}]"#;
+        let parsed = extract_upstream_error_message(arr_err);
+        assert_eq!(
+            parsed,
+            "[400 INVALID_ARGUMENT] Unhandled generated data mime type: image/jpeg"
+        );
+
+        let expected = b"gemini-native-png-bytes";
+        let b64 = base64::engine::general_purpose::STANDARD.encode(expected);
+        let ok_body = serde_json::json!({
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        { "text": "Here is the convenience store:" },
+                        { "inlineData": { "mimeType": "image/png", "data": b64 } }
+                    ]
+                },
+                "finishReason": "STOP"
+            }]
+        })
+        .to_string();
+
+        let (base, recorded, srv) = spawn_mock_server(vec![MockStep::Respond {
+            status: "200 OK",
+            body: ok_body,
+        }])
+        .await;
+
+        let client = reqwest::Client::new();
+        let (bytes, via) = generate_via_google_native(
+            &client,
+            &format!("{}/v1beta/openai/", base),
+            "AIzaSyTestKey",
+            "models/gemini-nano-banana-2.1",
+            "rainy store",
+            &[(b"guide", "image/png")],
+        )
+        .await
+        .expect("google native generateContent should succeed");
+
+        assert_eq!(via, "gemini:generateContent");
+        assert_eq!(bytes, expected);
+        let reqs = recorded.lock().unwrap();
+        assert_eq!(reqs.len(), 1);
+        assert!(
+            reqs[0].contains("POST /v1beta/models/gemini-nano-banana-2.1:generateContent"),
+            "req={}",
+            reqs[0]
+        );
+        assert!(reqs[0].to_ascii_lowercase().contains("x-goog-api-key: aizasytestkey"));
         srv.abort();
     }
 }

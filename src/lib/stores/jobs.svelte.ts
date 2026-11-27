@@ -23,6 +23,7 @@ export interface ActiveJob {
   elapsedSec: string;
   status: 'running' | 'error';
   errorMsg?: string;
+  errorDetails?: string;
   payload: GeneratePayload;
   uiSnapshot?: JobUiSnapshot;
   isMcp?: boolean;
@@ -92,6 +93,7 @@ class JobsStore {
 
     job.status = 'running';
     job.errorMsg = undefined;
+    job.errorDetails = undefined;
     job.startedAt = performance.now();
     job.elapsedSec = '0.0';
 
@@ -107,8 +109,11 @@ class JobsStore {
       await appStore.refreshProjects();
     } catch (e: any) {
       job.status = 'error';
-      job.errorMsg = e?.details ? `${e.message} — ${e.details}` : (e?.message ?? 'Unknown error');
-      appStore.toast('err', job.errorMsg!);
+      const msg = String(e?.message ?? 'Unknown error').trim();
+      const det = typeof e?.details === 'string' ? e.details.trim() : '';
+      job.errorMsg = msg;
+      job.errorDetails = det && det !== msg ? det : undefined;
+      appStore.toast('err', det && !msg.includes(det) ? `${msg}\n${det}` : msg);
     }
   }
 

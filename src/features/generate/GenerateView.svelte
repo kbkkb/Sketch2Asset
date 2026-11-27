@@ -56,6 +56,11 @@
   let activeModifierIds = $state<string[]>([]);
   let activeNegativeIds = $state<string[]>(['no_text', 'no_crop']);
   let customNegativeDraft = $state('');
+  let pixelGridSize = $state<0 | 16 | 32 | 48 | 64 | 96 | 128>(64);
+  let pixelGridStyle = $state<'neutral' | 'chroma'>('chroma');
+  let pixelAutoSnap = $state(true);
+  let pixelAutoCutout = $state(true);
+  let pixelPaletteColors = $state<number>(-1);
 
   // Project Hub & Style Reference Anchors state
   let drawerOpen = $state(true);
@@ -68,7 +73,33 @@
   let renameProjectDraft = $state('');
 
   let lightboxAsset = $state<AssetItem | null>(null);
+  let errorDetailJob = $state<ActiveJob | null>(null);
   let contextMenu = $state<{ x: number; y: number; asset: AssetItem } | null>(null);
+
+  function formatPrettyErrorDetails(raw?: string): string {
+    if (!raw) return '';
+    const trimmed = raw.trim();
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2);
+    } catch {
+      return trimmed;
+    }
+  }
+
+  async function copyJobError(job: ActiveJob) {
+    const parts = [
+      `Model: ${job.model}`,
+      job.prompt ? `Prompt: ${job.prompt}` : '',
+      `Error: ${job.errorMsg || 'Unknown error'}`,
+      job.errorDetails ? `\nRaw Response:\n${formatPrettyErrorDetails(job.errorDetails)}` : ''
+    ].filter(Boolean);
+    try {
+      await navigator.clipboard.writeText(parts.join('\n'));
+      appStore.toast('ok', i18n.t('toast_copied'));
+    } catch {
+      // ignore clipboard error
+    }
+  }
   let fileInputEl = $state<HTMLInputElement | null>(null);
   let projRefInputEl = $state<HTMLInputElement | null>(null);
 
@@ -113,7 +144,12 @@
         activeModifierIds: [] as string[],
         activeNegativeIds: ['no_text', 'no_crop'] as string[],
         customNegativeDraft: '',
-        autoInjectStyleRef: true
+        autoInjectStyleRef: true,
+        pixelGridSize: 64 as 0 | 16 | 32 | 48 | 64 | 96 | 128,
+        pixelGridStyle: 'chroma' as 'neutral' | 'chroma',
+        pixelAutoSnap: true,
+        pixelAutoCutout: true,
+        pixelPaletteColors: -1
       });
       if (savedDraft.promptDraft && !jobsStore.promptDraft) {
         jobsStore.promptDraft = savedDraft.promptDraft;
@@ -131,6 +167,15 @@
         : ['no_text', 'no_crop'];
       customNegativeDraft = savedDraft.customNegativeDraft || '';
       autoInjectStyleRef = savedDraft.autoInjectStyleRef ?? true;
+      pixelGridSize = ([0, 16, 32, 48, 64, 96, 128].includes(savedDraft.pixelGridSize)
+        ? savedDraft.pixelGridSize
+        : 64) as 0 | 16 | 32 | 48 | 64 | 96 | 128;
+      pixelGridStyle = savedDraft.pixelGridStyle === 'neutral' ? 'neutral' : 'chroma';
+      pixelAutoSnap = savedDraft.pixelAutoSnap ?? true;
+      pixelAutoCutout = savedDraft.pixelAutoCutout ?? true;
+      pixelPaletteColors = [-1, 0, 16, 24, 32, 48, 64].includes(savedDraft.pixelPaletteColors)
+        ? savedDraft.pixelPaletteColors
+        : -1;
       settingsHydrated = true;
       draftHydrated = true;
     }
@@ -156,7 +201,12 @@
       activeModifierIds,
       activeNegativeIds,
       customNegativeDraft,
-      autoInjectStyleRef
+      autoInjectStyleRef,
+      pixelGridSize,
+      pixelGridStyle,
+      pixelAutoSnap,
+      pixelAutoCutout,
+      pixelPaletteColors
     });
   });
 
@@ -259,6 +309,9 @@
       activeModifierIds = activeModifierIds.filter((x) => x !== id);
     } else {
       activeModifierIds = [...activeModifierIds, id];
+      if (id === 'px32') pixelGridSize = 32;
+      else if (id === 'px64') pixelGridSize = 64;
+      else if (id === 'px96') pixelGridSize = 96;
     }
   }
 
@@ -496,7 +549,12 @@
 
     // 像素模式下：对用户上传的草图/参考图预先做虚拟像素网格对齐，从源头引导大模型保持统一网格步长
     if (isPixelMode && effectiveSketchDataUrl) {
-      const targetGridDim = activeModifierIds.includes('px32') ? 32 : 64;
+      const targetGridDim =
+        pixelGridSize > 0
+          ? pixelGridSize
+          : activeModifierIds.includes('px32')
+            ? 32
+            : 64;
       effectiveSketchDataUrl = await snapDataUrlToVirtualGrid(effectiveSketchDataUrl, targetGridDim);
     }
 
@@ -554,7 +612,15 @@
           project: appStore.settings?.activeProject ?? '',
           count: clampedCount,
           sketchDataUrl: effectiveSketchDataUrl,
-          sketchPath: effectiveSketchPath
+          sketchPath: effectiveSketchPath,
+          pixelGridSize: isPixelMode && pixelGridSize > 0 ? pixelGridSize : null,
+          pixelGridStyle: isPixelMode && pixelGridSize > 0 ? pixelGridStyle : undefined,
+          pixelAutoSnap: isPixelMode && pixelGridSize > 0 ? pixelAutoSnap : undefined,
+          pixelAutoCutout: isPixelMode && pixelGridSize > 0 ? pixelAutoCutout : undefined,
+          pixelPaletteColors:
+            isPixelMode && pixelGridSize > 0 && pixelPaletteColors >= 0
+              ? pixelPaletteColors
+              : undefined
         },
         {
           archetype: selectedArchetype,
@@ -774,30 +840,54 @@
                   {/if}
                 </div>
               {:else}
-                <!-- Top Bar: Error Title + X Dismiss Button -->
-                <div class="flex items-center justify-between text-err">
-                  <div class="flex items-center gap-1.5 text-xs font-bold">
+                <!-- Top Bar: Error Title + Detail/Copy/Dismiss Buttons -->
+                <div class="flex items-center justify-between gap-1 text-err">
+                  <div class="flex min-w-0 items-center gap-1.5 text-xs font-bold">
                     <AlertTriangle size={15} class="shrink-0" />
-                    <span>{i18n.t('job_failed_title')}</span>
+                    <span class="truncate">{i18n.t('job_failed_title')}</span>
                   </div>
-                  <button
-                    type="button"
-                    onclick={() => jobsStore.dismissJob(job.id)}
-                    title={i18n.t('job_dismiss_title')}
-                    class="rounded-md p-1 text-fg-muted transition-colors hover:bg-err hover:text-white"
-                  >
-                    <X size={14} strokeWidth={2} />
-                  </button>
+                  <div class="flex shrink-0 items-center gap-0.5">
+                    <button
+                      type="button"
+                      onclick={() => (errorDetailJob = job)}
+                      title={i18n.locale === 'en' ? 'View Full Error Details' : '查看完整错误详情'}
+                      class="rounded-md bg-err/15 px-1.5 py-0.5 text-[10px] font-bold text-err transition-colors hover:bg-err hover:text-white"
+                    >
+                      {i18n.locale === 'en' ? 'Details' : '详情'}
+                    </button>
+                    <button
+                      type="button"
+                      onclick={() => copyJobError(job)}
+                      title={i18n.locale === 'en' ? 'Copy Error' : '复制完整报错'}
+                      class="rounded-md p-1 text-fg-muted transition-colors hover:bg-ink-2 hover:text-fg"
+                    >
+                      <Copy size={13} strokeWidth={2} />
+                    </button>
+                    <button
+                      type="button"
+                      onclick={() => jobsStore.dismissJob(job.id)}
+                      title={i18n.t('job_dismiss_title')}
+                      class="rounded-md p-1 text-fg-muted transition-colors hover:bg-err hover:text-white"
+                    >
+                      <X size={14} strokeWidth={2} />
+                    </button>
+                  </div>
                 </div>
 
-                <!-- Middle: Error Details & Original Prompt Preview -->
-                <div class="my-auto flex flex-col gap-1.5 overflow-hidden py-1">
-                  <p class="line-clamp-3 font-mono text-[11px] leading-snug text-err/90">
+                <!-- Middle: Scrollable / Click-to-Expand Error Details & Original Prompt Preview -->
+                <div class="my-auto flex min-h-0 flex-1 flex-col justify-center gap-1.5 py-1.5">
+                  <button
+                    type="button"
+                    onclick={() => (errorDetailJob = job)}
+                    title={i18n.locale === 'en' ? 'Click to view full error log' : '点击展开查看完整错误详情'}
+                    class="max-h-24 w-full cursor-pointer overflow-y-auto rounded-lg border border-err/25 bg-ink-0/55 px-2 py-1.5 text-left font-mono text-[11px] leading-snug break-all text-err/95 transition-colors hover:border-err/60 hover:bg-ink-0/80"
+                  >
                     {job.errorMsg}
-                  </p>
+                  </button>
                   {#if job.prompt}
                     <div
-                      class="line-clamp-2 rounded bg-ink-0/60 px-2 py-1 text-[10px] text-fg-muted"
+                      class="line-clamp-1 shrink-0 rounded bg-ink-0/60 px-2 py-1 text-[10px] text-fg-muted"
+                      title={job.prompt}
                     >
                       {job.prompt}
                     </div>
@@ -1145,6 +1235,98 @@
                 class="min-w-[180px] flex-1 rounded border border-line bg-ink-1 px-2 py-0.5 text-[11px] text-fg outline-none focus:border-warn placeholder:text-fg-subtle"
               />
             </div>
+          </div>
+        {/if}
+
+        <!-- Row 2b (Pixel Mode Only): Micro-Contrast Checkerboard Canvas Guide Strip -->
+        {#if selectedArchetype === 'pixel_sprite' || selectedStyle === 'pixel'}
+          <div
+            title={i18n.t('pixel_guide_desc')}
+            class="flex flex-wrap items-center gap-2 rounded-xl border border-accent/35 bg-accent/8 px-3 py-1.5 text-xs"
+          >
+            <div class="flex items-center gap-1.5">
+              <span
+                class="inline-block h-4 w-4 shrink-0 rounded border border-line-strong"
+                style={pixelGridStyle === 'chroma'
+                  ? 'background-image: conic-gradient(#D6F8DC 90deg, #BAEAC3 90deg 180deg, #D6F8DC 180deg 270deg, #BAEAC3 270deg); background-size: 8px 8px;'
+                  : 'background-image: conic-gradient(#F0F2F6 90deg, #DADEE4 90deg 180deg, #F0F2F6 180deg 270deg, #DADEE4 270deg); background-size: 8px 8px;'}
+              ></span>
+              <span class="font-mono text-[10px] font-bold text-accent uppercase">
+                {i18n.t('pixel_guide_title')}:
+              </span>
+            </div>
+
+            <div class="flex items-center gap-1">
+              {#each [0, 16, 32, 48, 64, 96, 128] as g (g)}
+                <button
+                  type="button"
+                  onclick={() => (pixelGridSize = g as 0 | 16 | 32 | 48 | 64 | 96 | 128)}
+                  class="rounded-md border px-2 py-0.5 font-mono text-[11px] font-semibold transition-all {pixelGridSize ===
+                  g
+                    ? 'border-accent bg-accent text-accent-ink'
+                    : 'border-line bg-ink-2/70 text-fg-muted hover:text-fg'}"
+                >
+                  {g === 0 ? i18n.t('pixel_guide_off') : `${g}×${g}`}
+                </button>
+              {/each}
+            </div>
+
+            {#if pixelGridSize > 0}
+              <div class="h-3.5 w-px bg-line"></div>
+              <div class="flex items-center gap-1">
+                <button
+                  type="button"
+                  onclick={() => {
+                    pixelGridStyle = 'chroma';
+                    pixelAutoCutout = true;
+                  }}
+                  class="rounded-md border px-2 py-0.5 text-[11px] font-medium transition-all {pixelGridStyle ===
+                  'chroma'
+                    ? 'border-ok/60 bg-ok/15 text-ok font-semibold'
+                    : 'border-line bg-ink-2/60 text-fg-muted hover:text-fg'}"
+                >
+                  {i18n.t('pixel_guide_chroma')}
+                </button>
+                <button
+                  type="button"
+                  onclick={() => (pixelGridStyle = 'neutral')}
+                  class="rounded-md border px-2 py-0.5 text-[11px] font-medium transition-all {pixelGridStyle ===
+                  'neutral'
+                    ? 'border-accent/60 bg-accent/15 text-accent font-semibold'
+                    : 'border-line bg-ink-2/60 text-fg-muted hover:text-fg'}"
+                >
+                  {i18n.t('pixel_guide_neutral')}
+                </button>
+              </div>
+
+              <div class="ml-auto flex items-center gap-3 text-[11px]">
+                <label class="flex cursor-pointer items-center gap-1 text-fg-muted hover:text-fg">
+                  <input type="checkbox" bind:checked={pixelAutoSnap} class="accent-accent" />
+                  <span>{i18n.t('pixel_guide_snap')}</span>
+                </label>
+                {#if pixelAutoSnap}
+                  <label class="flex cursor-pointer items-center gap-1 text-fg-muted hover:text-fg">
+                    <input type="checkbox" bind:checked={pixelAutoCutout} class="accent-accent" />
+                    <span>{i18n.t('pixel_guide_cutout')}</span>
+                  </label>
+                  <label class="flex items-center gap-1 text-fg-muted">
+                    <span>{i18n.t('pixel_guide_palette')}:</span>
+                    <select
+                      bind:value={pixelPaletteColors}
+                      class="rounded border border-line bg-ink-2 px-1.5 py-0.5 font-mono text-[11px] text-fg focus:border-accent focus:outline-none"
+                    >
+                      <option value={-1}>{i18n.t('pixel_guide_pal_auto')}</option>
+                      <option value={16}>16</option>
+                      <option value={24}>24</option>
+                      <option value={32}>32</option>
+                      <option value={48}>48</option>
+                      <option value={64}>64</option>
+                      <option value={0}>{i18n.t('pixel_guide_pal_off')}</option>
+                    </select>
+                  </label>
+                {/if}
+              </div>
+            {/if}
           </div>
         {/if}
 
@@ -1743,5 +1925,95 @@
       <Trash2 size={13} />
       <span>{i18n.t('asset_delete')}</span>
     </button>
+  </div>
+{/if}
+
+<!-- Full Generation Error Details Modal -->
+{#if errorDetailJob}
+  <div
+    role="dialog"
+    aria-modal="true"
+    tabindex="-1"
+    onclick={() => (errorDetailJob = null)}
+    onkeydown={(e) => e.key === 'Escape' && (errorDetailJob = null)}
+    class="fixed inset-0 z-[105] flex items-center justify-center bg-black/70 p-6 backdrop-blur-sm"
+  >
+    <div
+      role="presentation"
+      onclick={(e) => e.stopPropagation()}
+      class="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-err/50 bg-ink-1 shadow-2xl"
+    >
+      <div class="flex items-center justify-between gap-3 border-b border-line bg-err/10 px-5 py-3.5">
+        <div class="flex items-center gap-2 text-sm font-extrabold text-err">
+          <AlertTriangle size={17} class="shrink-0" />
+          <span>{i18n.locale === 'en' ? 'Generation Error Details' : '生图失败完整错误详情'}</span>
+        </div>
+        <button
+          type="button"
+          onclick={() => (errorDetailJob = null)}
+          class="rounded-lg p-1 text-fg-muted hover:bg-ink-2 hover:text-fg"
+        >
+          <X size={16} />
+        </button>
+      </div>
+
+      <div class="flex flex-1 flex-col gap-3 overflow-y-auto p-5 text-xs">
+        <div class="grid grid-cols-1 gap-2 rounded-xl border border-line bg-ink-0/60 p-3 font-mono text-[11px]">
+          <div>
+            <span class="font-bold text-fg-muted">{i18n.locale === 'en' ? 'Model:' : '调用模型：'}</span>
+            <span class="ml-1.5 select-text break-all text-fg">{errorDetailJob.model}</span>
+          </div>
+          {#if errorDetailJob.prompt}
+            <div>
+              <span class="font-bold text-fg-muted">{i18n.locale === 'en' ? 'Prompt:' : '提示词：'}</span>
+              <span class="ml-1.5 select-text break-words text-fg-muted">{errorDetailJob.prompt}</span>
+            </div>
+          {/if}
+        </div>
+
+        <div class="flex flex-col gap-1.5">
+          <span class="text-[11px] font-bold text-err">
+            {i18n.locale === 'en' ? 'Error Summary' : '错误摘要'}
+          </span>
+          <div class="rounded-xl border border-err/35 bg-err/8 p-3 font-mono text-xs leading-relaxed select-text break-words whitespace-pre-wrap text-err">
+            {errorDetailJob.errorMsg}
+          </div>
+        </div>
+
+        {#if errorDetailJob.errorDetails}
+          <div class="flex flex-col gap-1.5">
+            <span class="text-[11px] font-bold text-fg-muted">
+              {i18n.locale === 'en' ? 'Raw Upstream Response / Stack Details' : '上游接口原始返回报文 (Raw Response)'}
+            </span>
+            <pre
+              class="max-h-64 overflow-auto rounded-xl border border-line bg-ink-0 p-3 font-mono text-[11px] leading-relaxed select-text break-all whitespace-pre-wrap text-fg"
+            >{formatPrettyErrorDetails(errorDetailJob.errorDetails)}</pre>
+          </div>
+        {/if}
+      </div>
+
+      <div class="flex items-center justify-end gap-2.5 border-t border-line bg-ink-0 px-5 py-3">
+        <button
+          type="button"
+          onclick={() => copyJobError(errorDetailJob!)}
+          class="flex items-center gap-1.5 rounded-xl border border-line-strong bg-ink-2 px-3.5 py-1.5 text-xs font-bold text-fg transition-colors hover:border-accent hover:text-accent"
+        >
+          <Copy size={13} />
+          <span>{i18n.locale === 'en' ? 'Copy Full Error' : '复制完整报错'}</span>
+        </button>
+        <button
+          type="button"
+          onclick={() => {
+            const id = errorDetailJob!.id;
+            errorDetailJob = null;
+            jobsStore.retryJob(id);
+          }}
+          class="flex items-center gap-1.5 rounded-xl bg-accent px-4 py-1.5 text-xs font-extrabold text-accent-ink transition-colors hover:bg-accent-hover"
+        >
+          <RefreshCw size={13} />
+          <span>{i18n.t('job_retry_btn')}</span>
+        </button>
+      </div>
+    </div>
   </div>
 {/if}

@@ -34,12 +34,13 @@ export const ARCHETYPE_PRESETS: ArchetypePreset[] = [
     id: 'pixel_sprite',
     labelKey: 'arch_pixel_sprite',
     promptRule:
-      'Authentic 2D game pixel art sprite snapped to a strictly uniform 1:1 square pixel grid, consistent pixel block size across the entire sprite, ZERO mixels (never mix smaller sub-pixel resolutions for eyes or fine details), flat solid colors per pixel block, no gradient blur, no anti-aliasing fuzz, single isolated sprite.',
+      'Authentic 2D game pixel art sprite snapped to a strictly uniform 1:1 square pixel grid, large full-frame subject occupying 85%-90% of the canvas with minimal border margin, crisp limited cel-shaded color palette (2-4 flat shade steps per surface, zero smooth airbrush gradients), consistent pixel block size across the entire sprite, ZERO mixels (never mix smaller sub-pixel resolutions for eyes or fine details), single isolated sprite.',
     recommendedSize: '1024x1024',
     modifiers: [
       { id: 'no_mixels', zh: '严格等大网格 (禁伪像素)', en: 'Strict Grid (No Mixels)', promptSnippet: 'strictly uniform pixel grid size everywhere, zero mixels, no sub-pixel rendering, every facial feature and detail locked to the same coarse pixel grid' },
-      { id: 'px32', zh: '32×32 经典颗粒度', en: '32x32 Grid Density', promptSnippet: '32x32 retro pixel art resolution density, distinct chunky square pixels' },
+      { id: 'px32', zh: '32×32 经典颗粒度', en: '32x32 Grid Density', promptSnippet: '32x32 retro pixel art resolution density, distinct chunky square pixels, bold readable silhouette' },
       { id: 'px64', zh: '64×64 精细像素', en: '64x64 HD Pixel', promptSnippet: '64x64 detailed pixel art sprite, clean uniform pixel clusters' },
+      { id: 'px96', zh: '96×96 场景/建筑', en: '96x96 Scene/Building', promptSnippet: '96x96 high-density 16-bit pixel art prop or building diorama, crisp architectural pixel clusters' },
       { id: 'outline1px', zh: '1px 深色外描边', en: '1px Dark Outline', promptSnippet: 'clean 1-pixel dark outer contour around sprite' },
       { id: 'side_view', zh: '横版平台视角', en: 'Side-scroller View', promptSnippet: '2D side-scrolling platformer game view' },
       { id: 'topdown_rpg', zh: '俯视 RPG 视角', en: 'Top-down RPG View', promptSnippet: 'top-down 3/4 JRPG sprite perspective' }

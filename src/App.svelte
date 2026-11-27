@@ -23,6 +23,7 @@
   import { loadLastActiveView, saveLastActiveView } from '$lib/stores/workspace';
 
   let rememberCloseChoice = $state(false);
+  let expandedToastError = $state<string | null>(null);
 
   onMount(() => {
     const savedView = loadLastActiveView();
@@ -255,11 +256,11 @@
 
   <!-- Global Top-Center Prominent Toast Stack -->
   <div
-    class="pointer-events-none fixed top-14 left-1/2 z-[100] flex -translate-x-1/2 flex-col items-center gap-2.5"
+    class="pointer-events-none fixed top-14 left-1/2 z-[100] flex max-w-[min(92vw,720px)] -translate-x-1/2 flex-col items-center gap-2.5"
   >
     {#each appStore.toasts as item (item.id)}
       <div
-        class="pointer-events-auto flex min-w-[280px] items-center justify-center gap-2.5 rounded-2xl border px-5 py-3 text-sm font-bold shadow-2xl backdrop-blur-xl transition-all {item.kind ===
+        class="pointer-events-auto flex min-w-[280px] max-w-full items-center justify-center gap-2.5 rounded-2xl border px-5 py-3 text-sm font-bold shadow-2xl backdrop-blur-xl transition-all {item.kind ===
         'ok'
           ? 'border-ok/50 bg-ink-1/95 text-ok shadow-ok/10'
           : item.kind === 'err'
@@ -273,10 +274,67 @@
         {:else}
           <Info size={18} strokeWidth={2.2} class="shrink-0" />
         {/if}
-        <span>{item.text}</span>
+        <span class="line-clamp-2 break-all">{item.text}</span>
+        {#if item.kind === 'err' && item.text.length > 70}
+          <button
+            type="button"
+            onclick={() => (expandedToastError = item.text)}
+            class="shrink-0 rounded-lg border border-err/40 bg-err/15 px-2 py-0.5 text-xs font-bold text-err transition-colors hover:bg-err hover:text-white"
+          >
+            {i18n.locale === 'en' ? 'Details' : '详情'}
+          </button>
+        {/if}
       </div>
     {/each}
   </div>
+
+  {#if expandedToastError}
+    <div
+      role="dialog"
+      aria-modal="true"
+      tabindex="-1"
+      onclick={() => (expandedToastError = null)}
+      onkeydown={(e) => e.key === 'Escape' && (expandedToastError = null)}
+      class="fixed inset-0 z-[115] flex items-center justify-center bg-black/70 p-6 backdrop-blur-sm"
+    >
+      <div
+        role="presentation"
+        onclick={(e) => e.stopPropagation()}
+        class="flex max-h-[82vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-err/50 bg-ink-1 shadow-2xl"
+      >
+        <div class="flex items-center justify-between border-b border-line bg-err/10 px-5 py-3">
+          <div class="flex items-center gap-2 text-sm font-extrabold text-err">
+            <AlertCircle size={17} />
+            <span>{i18n.locale === 'en' ? 'Full Error Log' : '完整错误详情'}</span>
+          </div>
+          <button
+            type="button"
+            onclick={() => (expandedToastError = null)}
+            class="rounded-lg p-1 text-fg-muted hover:bg-ink-2 hover:text-fg"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <pre
+          class="flex-1 overflow-auto p-5 font-mono text-xs leading-relaxed select-text break-all whitespace-pre-wrap text-fg"
+        >{expandedToastError}</pre>
+        <div class="flex items-center justify-end gap-2 border-t border-line bg-ink-0 px-5 py-3">
+          <button
+            type="button"
+            onclick={async () => {
+              try {
+                await navigator.clipboard.writeText(expandedToastError || '');
+                appStore.toast('ok', i18n.t('toast_copied'));
+              } catch {}
+            }}
+            class="rounded-xl bg-accent px-4 py-1.5 text-xs font-extrabold text-accent-ink hover:brightness-105"
+          >
+            {i18n.locale === 'en' ? 'Copy' : '复制完整内容'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <!-- Close Confirmation Modal (Minimize to System Tray vs Exit Application) -->
   {#if appStore.closePromptOpen}

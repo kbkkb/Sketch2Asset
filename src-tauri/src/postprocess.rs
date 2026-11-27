@@ -1429,6 +1429,873 @@ pub fn quantize_spritesheet_frames(
     (q_sheet, n_sheet, q_frames, block)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PixelGridStyle {
+    Neutral,
+    Chroma,
+}
+
+impl PixelGridStyle {
+    pub fn from_str_opt(s: Option<&str>) -> Self {
+        match s.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+            Some("chroma" | "green" | "mint") => Self::Chroma,
+            _ => Self::Neutral,
+        }
+    }
+
+    pub fn palette_pair(self) -> ([u8; 3], [u8; 3]) {
+        match self {
+            // Soft studio light-gray micro-contrast (#F0F2F6 vs #DADEE4): Δ=66 between parities and L1=37 from #FFFFFF white highlights
+            Self::Neutral => ([240, 242, 246], [218, 222, 228]),
+            // Soft pastel-mint micro-contrast (#D6F8DC vs #BAEAC3): high chroma delta cleanly separatable without neon spill
+            Self::Chroma => ([214, 248, 220], [186, 234, 195]),
+        }
+    }
+}
+
+/// Compute exact integer `(cols, rows, cuts_x, cuts_y)` for a target canvas and short-side cell count.
+pub fn compute_grid_axes(
+    canvas_w: u32,
+    canvas_h: u32,
+    short_side_cells: u32,
+) -> (u32, u32, Vec<u32>, Vec<u32>) {
+    let cw = canvas_w.max(16);
+    let ch = canvas_h.max(16);
+    let max_cells = (cw.min(ch) / 2).max(8);
+    let short = short_side_cells.clamp(8, 256).min(max_cells);
+    let (cols, rows) = if cw <= ch {
+        let r = ((short as f64 * ch as f64) / cw as f64).round().max(8.0) as u32;
+        (short, r)
+    } else {
+        let c = ((short as f64 * cw as f64) / ch as f64).round().max(8.0) as u32;
+        (c, short)
+    };
+
+    let cuts_x: Vec<u32> = (0..=cols)
+        .map(|i| ((i as u64 * canvas_w as u64 + cols as u64 / 2) / cols as u64) as u32)
+        .collect();
+    let cuts_y: Vec<u32> = (0..=rows)
+        .map(|j| ((j as u64 * canvas_h as u64 + rows as u64 / 2) / rows as u64) as u32)
+        .collect();
+
+    (cols, rows, cuts_x, cuts_y)
+}
+
+/// Render a strict micro-contrast checkerboard pixel canvas PNG at `(canvas_w, canvas_h)`.
+pub fn render_checkerboard_guide_png(
+    canvas_w: u32,
+    canvas_h: u32,
+    short_side_cells: u32,
+    style: PixelGridStyle,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    let (cols, rows, cuts_x, cuts_y) = compute_grid_axes(canvas_w, canvas_h, short_side_cells);
+    let (even_rgb, odd_rgb) = style.palette_pair();
+    let even_px = Rgba([even_rgb[0], even_rgb[1], even_rgb[2], 255]);
+    let odd_px = Rgba([odd_rgb[0], odd_rgb[1], odd_rgb[2], 255]);
+
+    let mut img = RgbaImage::new(canvas_w, canvas_h);
+    for gy in 0..rows {
+        let y0 = cuts_y[gy as usize];
+        let y1 = cuts_y[gy as usize + 1].min(canvas_h);
+        for gx in 0..cols {
+            let x0 = cuts_x[gx as usize];
+            let x1 = cuts_x[gx as usize + 1].min(canvas_w);
+            let px = if (gx + gy) % 2 == 0 { even_px } else { odd_px };
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    img.put_pixel(x, y, px);
+                }
+            }
+        }
+    }
+
+    let mut buf = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut buf);
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .map_err(|e| format!("Failed to encode checkerboard guide PNG: {}", e))?;
+    Ok((buf, cols, rows))
+}
+
+/// Build strict square-fill instructions aligned to the generated checkerboard canvas.
+pub fn build_checkerboard_guide_prompt_rules(
+    cols: u32,
+    rows: u32,
+    style: PixelGridStyle,
+    is_tile_texture: bool,
+    has_user_ref: bool,
+) -> String {
+    let image_mapping = if has_user_ref {
+        format!(
+            "MULTI-IMAGE ROLE ASSIGNMENT: Use the FIRST image as the subject, palette, and silhouette reference, and paint the final pixel-art sprite onto the exact {cols}x{rows} micro-contrast checkerboard grid provided in the SECOND image."
+        )
+    } else {
+        format!(
+            "GRID CANVAS GUIDE ASSIGNMENT: The attached reference image is an exact {cols}x{rows} micro-contrast checkerboard pixel grid canvas. Paint directly by filling squares of this grid."
+        )
+    };
+
+    let palette_target = if cols.min(rows) <= 32 {
+        "12 to 24"
+    } else if cols.min(rows) <= 64 {
+        "16 to 32"
+    } else {
+        "20 to 44"
+    };
+    let cell_rule = format!(
+        "STRICT {cols}x{rows} PIXEL CELL & LIMITED PALETTE DISCIPLINE: Every drawn square in this {cols}x{rows} grid represents ONE single logical pixel and MUST be filled edge-to-edge with ONE flat solid color. Use a crisp hand-crafted pixel-art palette ({palette_target} distinct colors total, 2-to-4 flat cel-shaded steps per material, zero smooth airbrush gradients, zero noisy per-cell color drift). NEVER subdivide any grid square into smaller micro-pixels or sub-pixel facial details (ZERO mixels), NEVER blur or anti-alias across square boundaries, and snap 1-cell dark contours strictly onto whole squares of this grid."
+    );
+
+    let bg_rule = if is_tile_texture {
+        format!(
+            "CRITICAL TILE COVERAGE RULE: Fill ALL {cols}x{rows} grid squares edge-to-edge as a seamless four-way repeating orthographic pixel-art surface texture with flat ambient lighting and no leftover empty backdrop."
+        )
+    } else {
+        let backdrop_desc = match style {
+            PixelGridStyle::Neutral => {
+                "soft light-gray micro-checkerboard (#F0F2F6 / #DADEE4)"
+            }
+            PixelGridStyle::Chroma => {
+                "soft pastel-mint micro-checkerboard (#D6F8DC / #BAEAC3)"
+            }
+        };
+        format!(
+            "MAXIMIZE SUBJECT SCALE (FILL 85%-92% OF GRID) & CLEAN CHECKERBOARD BACKDROP: Scale the subject boldly to fill 85%-92% of the {cols}x{rows} canvas height/width so every pixel cell counts, leaving ONLY a minimal 1-to-2 square safety margin near the outer frame edges (never draw a tiny shrunken subject floating in huge empty space). Leave ALL unused background squares completely untouched as the clean {backdrop_desc} canvas pattern (zero cast ground shadow, zero vignette, zero floor plane, zero drawn wireframes or extra border lines)."
+        )
+    };
+
+    format!("{image_mapping}\n\n{cell_rule}\n\n{bg_rule}")
+}
+
+fn refine_prior_cuts(grad: &[f64], ideal: &[u32], total_len: u32) -> Vec<u32> {
+    let n = ideal.len().saturating_sub(1);
+    if n <= 1 || total_len < 16 {
+        return ideal.to_vec();
+    }
+    let step = ((total_len as i32) / (n as i32)).max(2);
+    let max_nudge = (step / 5).clamp(1, 3);
+    let min_gap = (step / 2).max(1);
+
+    let active_vals: Vec<f64> = grad.iter().copied().filter(|&v| v > 0.0).collect();
+    let mean_grad = if active_vals.is_empty() {
+        1.0
+    } else {
+        (active_vals.iter().sum::<f64>() / active_vals.len() as f64).max(1.0)
+    };
+
+    let mut cuts = ideal.to_vec();
+    for k in 1..n {
+        let id_pos = ideal[k] as i32;
+        let prev_cut = cuts[k - 1] as i32;
+        let remain_min = ((n - k) as i32) * min_gap;
+        let lo = (id_pos - max_nudge).max(prev_cut + min_gap).max(1);
+        let hi = (id_pos + max_nudge)
+            .min((total_len as i32) - remain_min)
+            .min((total_len as i32) - 1);
+        if lo > hi {
+            cuts[k] = ideal[k];
+            continue;
+        }
+        let mut best_pos = id_pos.clamp(lo, hi);
+        let mut best_score = f64::NEG_INFINITY;
+        for pos in lo..=hi {
+            let g = grad[pos as usize];
+            let dist = (pos - id_pos).abs() as f64;
+            let score = g - 0.18 * mean_grad * dist;
+            if score > best_score + 1e-6 {
+                best_score = score;
+                best_pos = pos;
+            }
+        }
+        cuts[k] = best_pos as u32;
+    }
+    cuts[0] = 0;
+    cuts[n] = total_len;
+    cuts
+}
+
+#[inline]
+fn rgb_l1(a: [u8; 3], b: [u8; 3]) -> i32 {
+    (a[0] as i32 - b[0] as i32).abs()
+        + (a[1] as i32 - b[1] as i32).abs()
+        + (a[2] as i32 - b[2] as i32).abs()
+}
+
+#[inline]
+fn rgb_chroma(c: [u8; 3]) -> i32 {
+    c[0].max(c[1]).max(c[2]) as i32 - c[0].min(c[1]).min(c[2]) as i32
+}
+
+#[inline]
+fn rgb_luma(c: [u8; 3]) -> i32 {
+    (299 * c[0] as i32 + 587 * c[1] as i32 + 114 * c[2] as i32) / 1000
+}
+
+fn median_rgb_or(samples: &[[u8; 3]], fallback: [u8; 3]) -> [u8; 3] {
+    if samples.len() < 3 {
+        return fallback;
+    }
+    let mut rs: Vec<u8> = samples.iter().map(|c| c[0]).collect();
+    let mut gs: Vec<u8> = samples.iter().map(|c| c[1]).collect();
+    let mut bs: Vec<u8> = samples.iter().map(|c| c[2]).collect();
+    rs.sort_unstable();
+    gs.sort_unstable();
+    bs.sort_unstable();
+    let mid = samples.len() / 2;
+    [rs[mid], gs[mid], bs[mid]]
+}
+
+fn is_guided_bg_cell(
+    rgb: [u8; 3],
+    parity_even: bool,
+    style: PixelGridStyle,
+    bg_even: [u8; 3],
+    bg_odd: [u8; 3],
+    has_parity_step: bool,
+) -> bool {
+    let target_bg = if parity_even { bg_even } else { bg_odd };
+    let dist_parity = rgb_l1(rgb, target_bg);
+    let dist_any = dist_parity.min(rgb_l1(rgb, if parity_even { bg_odd } else { bg_even }));
+    match style {
+        PixelGridStyle::Chroma => {
+            let green_dom = rgb[1] as i32 - rgb[0].max(rgb[2]) as i32;
+            rgb[1] >= 135
+                && green_dom >= 8
+                && (dist_parity <= 64 || (dist_any <= 38 && green_dom >= 16))
+        }
+        PixelGridStyle::Neutral => {
+            let ch = rgb_chroma(rgb);
+            let lu = rgb_luma(rgb);
+            if ch > 22 || lu < 185 {
+                return false;
+            }
+            if has_parity_step {
+                dist_parity <= 24
+            } else {
+                dist_any <= 20
+            }
+        }
+    }
+}
+
+fn is_enclosed_chroma_pocket_cell(
+    rgb: [u8; 3],
+    parity_even: bool,
+    bg_even: [u8; 3],
+    bg_odd: [u8; 3],
+) -> bool {
+    let green_dom = rgb[1] as i32 - rgb[0].max(rgb[2]) as i32;
+    if rgb[1] < 195 || rgb[0] < 158 || rgb[2] < 162 || green_dom < 12 {
+        return false;
+    }
+    let target_bg = if parity_even { bg_even } else { bg_odd };
+    let other_bg = if parity_even { bg_odd } else { bg_even };
+    let dist_parity = rgb_l1(rgb, target_bg);
+    let dist_any = dist_parity.min(rgb_l1(rgb, other_bg));
+    dist_parity <= 44 || dist_any <= 32
+}
+
+#[inline]
+fn redmean_dist_sq(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let rmean = 0.5 * (a[0] + b[0]);
+    let dr = a[0] - b[0];
+    let dg = a[1] - b[1];
+    let db = a[2] - b[2];
+    (2.0 + rmean / 256.0) * dr * dr + 4.0 * dg * dg + (2.0 + (255.0 - rmean) / 256.0) * db * db
+}
+
+/// Deterministic salience-boosted perceptual palette quantizer in redmean RGB space.
+/// Collapses AI continuous gradient drift into crisp cel-shaded steps while protecting
+/// 1-pixel dark outlines and small bright specular/neon accents via medoid snapping.
+pub fn quantize_pixel_palette_smart(native: &mut RgbaImage, max_colors: usize) {
+    if max_colors < 2 {
+        return;
+    }
+    let mut freq: std::collections::HashMap<[u8; 3], u32> = std::collections::HashMap::new();
+    for p in native.pixels() {
+        if p[3] >= 128 {
+            *freq.entry([p[0], p[1], p[2]]).or_insert(0) += 1;
+        }
+    }
+    if freq.len() <= max_colors {
+        return;
+    }
+
+    #[derive(Clone, Copy)]
+    struct ColorEntry {
+        rgb: [u8; 3],
+        f: [f64; 3],
+        count: u32,
+        luma: i32,
+        salience: f64,
+    }
+
+    let mut entries: Vec<ColorEntry> = freq
+        .into_iter()
+        .map(|(rgb, count)| {
+            let ch = rgb_chroma(rgb) as f64;
+            let salience = (count as f64).powf(0.28) * (1.0 + ch / 140.0);
+            ColorEntry {
+                rgb,
+                f: [rgb[0] as f64, rgb[1] as f64, rgb[2] as f64],
+                count,
+                luma: rgb_luma(rgb),
+                salience,
+            }
+        })
+        .collect();
+
+    entries.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| a.rgb[0].cmp(&b.rgb[0]))
+            .then_with(|| a.rgb[1].cmp(&b.rgb[1]))
+            .then_with(|| a.rgb[2].cmp(&b.rgb[2]))
+    });
+
+    let k = max_colors.min(entries.len());
+    let mut centers: Vec<[f64; 3]> = Vec::with_capacity(k);
+    let mut chosen = vec![false; entries.len()];
+
+    // Seed 0: most frequent color
+    centers.push(entries[0].f);
+    chosen[0] = true;
+
+    // Seed 1: darkest outline color
+    if centers.len() < k {
+        if let Some((idx, _)) = entries
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !chosen[*i])
+            .min_by(|(_, a), (_, b)| a.luma.cmp(&b.luma).then_with(|| b.count.cmp(&a.count)))
+        {
+            centers.push(entries[idx].f);
+            chosen[idx] = true;
+        }
+    }
+
+    // Seed 2: brightest highlight color
+    if centers.len() < k {
+        if let Some((idx, _)) = entries
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !chosen[*i])
+            .max_by(|(_, a), (_, b)| a.luma.cmp(&b.luma).then_with(|| b.count.cmp(&a.count)))
+        {
+            centers.push(entries[idx].f);
+            chosen[idx] = true;
+        }
+    }
+
+    // Remaining seeds: deterministic salience-boosted farthest-point sampling
+    let mut min_d2: Vec<f64> = entries
+        .iter()
+        .map(|e| {
+            centers
+                .iter()
+                .map(|c| redmean_dist_sq(e.f, *c))
+                .fold(f64::INFINITY, f64::min)
+        })
+        .collect();
+
+    while centers.len() < k {
+        let mut best_idx = None;
+        let mut best_score = -1.0f64;
+        for (i, e) in entries.iter().enumerate() {
+            if chosen[i] {
+                continue;
+            }
+            let score = min_d2[i] * e.salience;
+            if score > best_score {
+                best_score = score;
+                best_idx = Some(i);
+            }
+        }
+        let Some(idx) = best_idx else { break };
+        chosen[idx] = true;
+        let new_c = entries[idx].f;
+        centers.push(new_c);
+        for (i, e) in entries.iter().enumerate() {
+            if !chosen[i] {
+                let d2 = redmean_dist_sq(e.f, new_c);
+                if d2 < min_d2[i] {
+                    min_d2[i] = d2;
+                }
+            }
+        }
+    }
+
+    // 6 damped-weight Lloyd refinement iterations
+    let mut assign = vec![0usize; entries.len()];
+    for _ in 0..6 {
+        let mut sum_r = vec![0.0f64; centers.len()];
+        let mut sum_g = vec![0.0f64; centers.len()];
+        let mut sum_b = vec![0.0f64; centers.len()];
+        let mut sum_w = vec![0.0f64; centers.len()];
+
+        for (i, e) in entries.iter().enumerate() {
+            let mut best_c = 0usize;
+            let mut best_d = f64::INFINITY;
+            for (ci, c) in centers.iter().enumerate() {
+                let d = redmean_dist_sq(e.f, *c);
+                if d < best_d {
+                    best_d = d;
+                    best_c = ci;
+                }
+            }
+            assign[i] = best_c;
+            let w = (e.count as f64).powf(0.65);
+            sum_r[best_c] += e.f[0] * w;
+            sum_g[best_c] += e.f[1] * w;
+            sum_b[best_c] += e.f[2] * w;
+            sum_w[best_c] += w;
+        }
+
+        for ci in 0..centers.len() {
+            if sum_w[ci] > 0.0 {
+                centers[ci] = [
+                    sum_r[ci] / sum_w[ci],
+                    sum_g[ci] / sum_w[ci],
+                    sum_b[ci] / sum_w[ci],
+                ];
+            }
+        }
+    }
+
+    // Snap each cluster center to its cleanest real medoid RGB so outlines/whites stay razor-sharp
+    let mut palette: Vec<[u8; 3]> = centers
+        .iter()
+        .map(|c| [c[0].round() as u8, c[1].round() as u8, c[2].round() as u8])
+        .collect();
+    let mut best_medoid_cost = vec![f64::INFINITY; centers.len()];
+    for (i, e) in entries.iter().enumerate() {
+        let ci = assign[i];
+        let cost = redmean_dist_sq(e.f, centers[ci]) / (e.count as f64).powf(0.15);
+        if cost < best_medoid_cost[ci] {
+            best_medoid_cost[ci] = cost;
+            palette[ci] = e.rgb;
+        }
+    }
+    let palette_f: Vec<[f64; 3]> = palette
+        .iter()
+        .map(|c| [c[0] as f64, c[1] as f64, c[2] as f64])
+        .collect();
+
+    for p in native.pixels_mut() {
+        if p[3] < 128 {
+            continue;
+        }
+        let pf = [p[0] as f64, p[1] as f64, p[2] as f64];
+        let mut best_idx = 0usize;
+        let mut best_d = f64::INFINITY;
+        for (pi, c) in palette_f.iter().enumerate() {
+            let d = redmean_dist_sq(pf, *c);
+            if d < best_d {
+                best_d = d;
+                best_idx = pi;
+            }
+        }
+        let chosen_rgb = palette[best_idx];
+        *p = Rgba([chosen_rgb[0], chosen_rgb[1], chosen_rgb[2], 255]);
+    }
+}
+
+/// Snap an image generated onto a known `short_side_cells` micro-contrast checkerboard back to exact
+/// integer cells with bounded ±1..3px edge snapping, core-weighted anti-AA sampling, dark-outline /
+/// specular protection, optional corner-calibrated border parity flood-fill + enclosed chroma-pocket
+/// cutout, and salience-boosted perceptual palette quantization.
+/// Returns `(upscaled_image, native_1x_image, cols, rows)`.
+pub fn snap_guided_pixel_art(
+    img: &RgbaImage,
+    short_side_cells: u32,
+    style: PixelGridStyle,
+    auto_cutout: bool,
+    is_tile_texture: bool,
+    max_colors: Option<u32>,
+) -> (RgbaImage, RgbaImage, u32, u32) {
+    let w = img.width();
+    let h = img.height();
+    let (cols, rows, ideal_x, ideal_y) = compute_grid_axes(w, h, short_side_cells);
+    if w < cols * 2 || h < rows * 2 {
+        return (img.clone(), img.clone(), w, h);
+    }
+
+    // 1. Compute horizontal & vertical transition profiles for ±3px prior-bounded seam alignment
+    let mut grad_x = vec![0.0f64; w as usize];
+    let mut grad_y = vec![0.0f64; h as usize];
+    for y in 0..h {
+        for x in 1..w {
+            let p0 = img.get_pixel(x - 1, y);
+            let p1 = img.get_pixel(x, y);
+            let diff = rgb_l1([p0[0], p0[1], p0[2]], [p1[0], p1[1], p1[2]])
+                + 2 * (p0[3] as i32 - p1[3] as i32).abs();
+            if diff > 24 {
+                grad_x[x as usize] += diff as f64;
+            }
+        }
+    }
+    for x in 0..w {
+        for y in 1..h {
+            let p0 = img.get_pixel(x, y - 1);
+            let p1 = img.get_pixel(x, y);
+            let diff = rgb_l1([p0[0], p0[1], p0[2]], [p1[0], p1[1], p1[2]])
+                + 2 * (p0[3] as i32 - p1[3] as i32).abs();
+            if diff > 24 {
+                grad_y[y as usize] += diff as f64;
+            }
+        }
+    }
+
+    let cuts_x = refine_prior_cuts(&grad_x, &ideal_x, w);
+    let cuts_y = refine_prior_cuts(&grad_y, &ideal_y, h);
+
+    // 2. Core-weighted anti-AA sampling per grid square with 1-cell outline & highlight preservation
+    let mut native = RgbaImage::new(cols, rows);
+    for gy in 0..rows {
+        let y0 = cuts_y[gy as usize];
+        let y1 = cuts_y[gy as usize + 1].max(y0 + 1).min(h);
+        let bh = y1 - y0;
+        let my = if bh >= 6 {
+            (bh * 18) / 100
+        } else if bh >= 4 {
+            1
+        } else {
+            0
+        };
+        let sy0 = (y0 + my).min(y1 - 1);
+        let sy1 = (y1 - my).max(sy0 + 1);
+
+        for gx in 0..cols {
+            let x0 = cuts_x[gx as usize];
+            let x1 = cuts_x[gx as usize + 1].max(x0 + 1).min(w);
+            let bw = x1 - x0;
+            let mx = if bw >= 6 {
+                (bw * 18) / 100
+            } else if bw >= 4 {
+                1
+            } else {
+                0
+            };
+            let sx0 = (x0 + mx).min(x1 - 1);
+            let sx1 = (x1 - mx).max(sx0 + 1);
+
+            struct CellCluster {
+                sum_r: u64,
+                sum_g: u64,
+                sum_b: u64,
+                w: u64,
+                r: u8,
+                g: u8,
+                b: u8,
+            }
+            let mut clusters: Vec<CellCluster> = Vec::new();
+            let mut opaque_w: u64 = 0;
+            let mut total_w: u64 = 0;
+
+            for py in sy0..sy1 {
+                for px in sx0..sx1 {
+                    let c = *img.get_pixel(px, py);
+                    let mut local_g = 0i32;
+                    if px > 0 && px + 1 < w {
+                        let pl = *img.get_pixel(px - 1, py);
+                        let pr = *img.get_pixel(px + 1, py);
+                        local_g += rgb_l1([pl[0], pl[1], pl[2]], [pr[0], pr[1], pr[2]]);
+                    }
+                    if py > 0 && py + 1 < h {
+                        let pu = *img.get_pixel(px, py - 1);
+                        let pd = *img.get_pixel(px, py + 1);
+                        local_g += rgb_l1([pu[0], pu[1], pu[2]], [pd[0], pd[1], pd[2]]);
+                    }
+                    let wt: u64 = if local_g < 36 {
+                        4
+                    } else if local_g < 110 {
+                        2
+                    } else {
+                        1
+                    };
+                    total_w += wt;
+                    if c[3] < 115 {
+                        continue;
+                    }
+                    opaque_w += wt;
+                    let cur = [c[0], c[1], c[2]];
+                    if let Some(cl) = clusters
+                        .iter_mut()
+                        .find(|cl| rgb_l1(cur, [cl.r, cl.g, cl.b]) <= 24)
+                    {
+                        cl.w += wt;
+                        cl.sum_r += (c[0] as u64) * wt;
+                        cl.sum_g += (c[1] as u64) * wt;
+                        cl.sum_b += (c[2] as u64) * wt;
+                        cl.r = (cl.sum_r / cl.w) as u8;
+                        cl.g = (cl.sum_g / cl.w) as u8;
+                        cl.b = (cl.sum_b / cl.w) as u8;
+                    } else {
+                        clusters.push(CellCluster {
+                            sum_r: (c[0] as u64) * wt,
+                            sum_g: (c[1] as u64) * wt,
+                            sum_b: (c[2] as u64) * wt,
+                            w: wt,
+                            r: c[0],
+                            g: c[1],
+                            b: c[2],
+                        });
+                    }
+                }
+            }
+
+            if clusters.is_empty() || opaque_w * 100 < total_w * 38 {
+                native.put_pixel(gx, gy, Rgba([0, 0, 0, 0]));
+                continue;
+            }
+
+            clusters.sort_by(|a, b| b.w.cmp(&a.w));
+            let mut chosen = [clusters[0].r, clusters[0].g, clusters[0].b];
+            let best_lu = rgb_luma(chosen);
+            for cl in clusters.iter().skip(1) {
+                let rgb = [cl.r, cl.g, cl.b];
+                let lu = rgb_luma(rgb);
+                if cl.w * 100 >= opaque_w * 34 && lu < 82 && best_lu - lu > 68 {
+                    chosen = rgb;
+                    break;
+                }
+                if cl.w * 100 >= opaque_w * 32 && lu > 212 && lu - best_lu > 72 {
+                    chosen = rgb;
+                    break;
+                }
+            }
+
+            native.put_pixel(gx, gy, Rgba([chosen[0], chosen[1], chosen[2], 255]));
+        }
+    }
+
+    // 3. Corner-calibrated perimeter parity flood-fill cutout (preserves interior whites & highlights)
+    if auto_cutout && !is_tile_texture {
+        let (ideal_even, ideal_odd) = style.palette_pair();
+        let mut even_samples: Vec<[u8; 3]> = Vec::new();
+        let mut odd_samples: Vec<[u8; 3]> = Vec::new();
+
+        for gy in 0..rows {
+            for gx in 0..cols {
+                if gx > 0 && gx + 1 < cols && gy > 0 && gy + 1 < rows {
+                    continue;
+                }
+                let p = *native.get_pixel(gx, gy);
+                if p[3] == 0 {
+                    continue;
+                }
+                let rgb = [p[0], p[1], p[2]];
+                let matches_cand = match style {
+                    PixelGridStyle::Chroma => {
+                        rgb[1] >= 145 && (rgb[1] as i32 - rgb[0].max(rgb[2]) as i32) >= 8
+                    }
+                    PixelGridStyle::Neutral => rgb_chroma(rgb) <= 26 && rgb_luma(rgb) >= 185,
+                };
+                if matches_cand {
+                    if (gx + gy) % 2 == 0 {
+                        even_samples.push(rgb);
+                    } else {
+                        odd_samples.push(rgb);
+                    }
+                }
+            }
+        }
+
+        let bg_even = median_rgb_or(&even_samples, ideal_even);
+        let bg_odd = median_rgb_or(&odd_samples, ideal_odd);
+        let has_parity_step = rgb_l1(bg_even, bg_odd) > 12;
+
+        let mut visited = vec![false; (cols * rows) as usize];
+        let mut queue = std::collections::VecDeque::new();
+
+        for gy in 0..rows {
+            for gx in 0..cols {
+                if gx > 0 && gx + 1 < cols && gy > 0 && gy + 1 < rows {
+                    continue;
+                }
+                let idx = (gy * cols + gx) as usize;
+                let p = *native.get_pixel(gx, gy);
+                if p[3] == 0
+                    || is_guided_bg_cell(
+                        [p[0], p[1], p[2]],
+                        (gx + gy) % 2 == 0,
+                        style,
+                        bg_even,
+                        bg_odd,
+                        has_parity_step,
+                    )
+                {
+                    visited[idx] = true;
+                    queue.push_back((gx, gy));
+                }
+            }
+        }
+
+        while let Some((x, y)) = queue.pop_front() {
+            native.put_pixel(x, y, Rgba([0, 0, 0, 0]));
+            let neighbors = [
+                (x.wrapping_sub(1), y, x > 0),
+                (x + 1, y, x + 1 < cols),
+                (x, y.wrapping_sub(1), y > 0),
+                (x, y + 1, y + 1 < rows),
+            ];
+            for (nx, ny, ok) in neighbors {
+                if !ok {
+                    continue;
+                }
+                let nidx = (ny * cols + nx) as usize;
+                if visited[nidx] {
+                    continue;
+                }
+                let np = *native.get_pixel(nx, ny);
+                if np[3] == 0
+                    || is_guided_bg_cell(
+                        [np[0], np[1], np[2]],
+                        (nx + ny) % 2 == 0,
+                        style,
+                        bg_even,
+                        bg_odd,
+                        has_parity_step,
+                    )
+                {
+                    visited[nidx] = true;
+                    queue.push_back((nx, ny));
+                }
+            }
+        }
+
+        // 3b. Penetrate closed 1px contours to clear trapped interior pastel-mint holes (Chroma mode)
+        if style == PixelGridStyle::Chroma {
+            let max_pocket_area = ((cols * rows) / 8).max(4) as usize;
+            let mut pocket_visited = visited;
+            for gy in 1..rows.saturating_sub(1) {
+                for gx in 1..cols.saturating_sub(1) {
+                    let idx = (gy * cols + gx) as usize;
+                    if pocket_visited[idx] {
+                        continue;
+                    }
+                    let p = *native.get_pixel(gx, gy);
+                    if p[3] == 0
+                        || !is_enclosed_chroma_pocket_cell(
+                            [p[0], p[1], p[2]],
+                            (gx + gy) % 2 == 0,
+                            bg_even,
+                            bg_odd,
+                        )
+                    {
+                        continue;
+                    }
+                    let mut comp = Vec::new();
+                    let mut pqueue = std::collections::VecDeque::new();
+                    pocket_visited[idx] = true;
+                    pqueue.push_back((gx, gy));
+                    while let Some((cx, cy)) = pqueue.pop_front() {
+                        comp.push((cx, cy));
+                        let cbs = [
+                            (cx.wrapping_sub(1), cy, cx > 0),
+                            (cx + 1, cy, cx + 1 < cols),
+                            (cx, cy.wrapping_sub(1), cy > 0),
+                            (cx, cy + 1, cy + 1 < rows),
+                        ];
+                        for (nx, ny, ok) in cbs {
+                            if !ok {
+                                continue;
+                            }
+                            let nidx = (ny * cols + nx) as usize;
+                            if pocket_visited[nidx] {
+                                continue;
+                            }
+                            let np = *native.get_pixel(nx, ny);
+                            if np[3] > 0
+                                && is_enclosed_chroma_pocket_cell(
+                                    [np[0], np[1], np[2]],
+                                    (nx + ny) % 2 == 0,
+                                    bg_even,
+                                    bg_odd,
+                                )
+                            {
+                                pocket_visited[nidx] = true;
+                                pqueue.push_back((nx, ny));
+                            }
+                        }
+                    }
+                    if comp.len() <= max_pocket_area {
+                        for (cx, cy) in comp {
+                            native.put_pixel(cx, cy, Rgba([0, 0, 0, 0]));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Gentle compression jitter coalescing (diff <= 12 L1 only, preserving shading)
+    let snap_copy = native.clone();
+    for y in 1..rows.saturating_sub(1) {
+        for x in 1..cols.saturating_sub(1) {
+            let c = *snap_copy.get_pixel(x, y);
+            if c[3] < 255 {
+                continue;
+            }
+            for nb in [
+                *snap_copy.get_pixel(x, y - 1),
+                *snap_copy.get_pixel(x, y + 1),
+                *snap_copy.get_pixel(x - 1, y),
+                *snap_copy.get_pixel(x + 1, y),
+            ] {
+                if nb[3] == 255 {
+                    let d = rgb_l1([c[0], c[1], c[2]], [nb[0], nb[1], nb[2]]);
+                    if d > 0 && d <= 12 {
+                        native.put_pixel(x, y, nb);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // 4b. Perceptual palette quantization (eliminates continuous gradient bloat while keeping highlights)
+    let auto_k = if short_side_cells <= 24 {
+        16
+    } else if short_side_cells <= 40 {
+        24
+    } else if short_side_cells <= 56 {
+        32
+    } else if short_side_cells <= 80 {
+        40
+    } else {
+        48
+    };
+    let target_k = match max_colors {
+        Some(0) => 0,
+        Some(k) => k.clamp(4, 128) as usize,
+        None => auto_k,
+    };
+    if target_k > 0 {
+        quantize_pixel_palette_smart(&mut native, target_k);
+    }
+
+    // 5. Exact integer Nearest-Neighbor upscale near target canvas resolution
+    let block = ((w as f64) / (cols as f64)).round().max(4.0) as u32;
+    let up_w = cols * block;
+    let up_h = rows * block;
+    let mut upscaled = RgbaImage::new(up_w, up_h);
+    for gy in 0..rows {
+        for gx in 0..cols {
+            let px = *native.get_pixel(gx, gy);
+            let ox = gx * block;
+            let oy = gy * block;
+            for dy in 0..block {
+                for dx in 0..block {
+                    upscaled.put_pixel(ox + dx, oy + dy, px);
+                }
+            }
+        }
+    }
+
+    (upscaled, native, cols, rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1785,6 +2652,212 @@ mod tests {
             tip_px,
             Rgba([20, 230, 255, 24]),
             "Soft cyan glow tip must keep its color and alpha without being overwritten by solid blade"
+        );
+    }
+
+    #[test]
+    fn test_render_checkerboard_guide_and_axes_exact() {
+        let (cols, rows, cx, cy) = compute_grid_axes(1024, 1024, 32);
+        assert_eq!((cols, rows), (32, 32));
+        assert_eq!(cx.len(), 33);
+        assert_eq!(cy.len(), 33);
+        assert_eq!(*cx.first().unwrap(), 0);
+        assert_eq!(*cx.last().unwrap(), 1024);
+
+        // Verify non-power-of-two tiers (48, 96, 128) stay 100% exact without cell_px rounding drift
+        assert_eq!(compute_grid_axes(1024, 1024, 48).0, 48);
+        assert_eq!(compute_grid_axes(1024, 1024, 96).0, 96);
+        assert_eq!(compute_grid_axes(1024, 1024, 128).0, 128);
+        let (w_cols, w_rows, _, _) = compute_grid_axes(1536, 1024, 64);
+        assert_eq!((w_cols, w_rows), (96, 64));
+
+        let (guide_png, gcols, grows) =
+            render_checkerboard_guide_png(1024, 1024, 32, PixelGridStyle::Chroma).unwrap();
+        assert_eq!((gcols, grows), (32, 32));
+        let decoded = image::load_from_memory(&guide_png).unwrap().to_rgba8();
+        assert_eq!(decoded.dimensions(), (1024, 1024));
+        assert_eq!(*decoded.get_pixel(16, 16), Rgba([214, 248, 220, 255]));
+        assert_eq!(*decoded.get_pixel(48, 16), Rgba([186, 234, 195, 255]));
+    }
+
+    #[test]
+    fn test_snap_guided_pixel_art_cutout_preserves_white_hair_and_outlines() {
+        for style in [PixelGridStyle::Chroma, PixelGridStyle::Neutral] {
+            let (even_rgb, odd_rgb) = style.palette_pair();
+            // 128x128 synthetic output on 16x16 grid (cell = 8px), with a +2px horizontal drift
+            let mut canvas = RgbaImage::new(128, 128);
+            for gy in 0..16u32 {
+                for gx in 0..16u32 {
+                    let bg = if (gx + gy) % 2 == 0 { even_rgb } else { odd_rgb };
+                    for dy in 0..8 {
+                        for dx in 0..8 {
+                            canvas.put_pixel(
+                                gx * 8 + dx,
+                                gy * 8 + dy,
+                                Rgba([bg[0], bg[1], bg[2], 255]),
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Paint a 16x16 logical sprite (with +2px horizontal shift inside the canvas):
+            // - Rimless pure-white hair at top (gx=6..10, gy=3..5) directly touching checkerboard
+            // - Dark 1-cell outline (gx=5..11, gy=5..10)
+            // - Interior pure-white eye highlight at (7, 7)
+            let paint_cell = |img: &mut RgbaImage, gx: i32, gy: i32, rgb: [u8; 3]| {
+                for dy in 0..8i32 {
+                    for dx in 0..8i32 {
+                        let px = (gx * 8 + dx + 2).clamp(0, 127) as u32;
+                        let py = (gy * 8 + dy).clamp(0, 127) as u32;
+                        img.put_pixel(px, py, Rgba([rgb[0], rgb[1], rgb[2], 255]));
+                    }
+                }
+            };
+
+            for gy in 3..5 {
+                for gx in 6..10 {
+                    paint_cell(&mut canvas, gx, gy, [255, 255, 255]);
+                }
+            }
+            for gy in 5..10 {
+                for gx in 5..11 {
+                    let is_border = gy == 5 || gy == 9 || gx == 5 || gx == 10;
+                    paint_cell(
+                        &mut canvas,
+                        gx,
+                        gy,
+                        if is_border { [25, 22, 30] } else { [210, 120, 90] },
+                    );
+                }
+            }
+            paint_cell(&mut canvas, 7, 7, [255, 255, 255]);
+
+            let (upscaled, native, cols, rows) =
+                snap_guided_pixel_art(&canvas, 16, style, true, false, None);
+            assert_eq!((cols, rows), (16, 16));
+            assert_eq!(upscaled.dimensions(), (128, 128));
+
+            // Background corner must be transparent
+            assert_eq!(native.get_pixel(0, 0)[3], 0);
+            assert_eq!(native.get_pixel(15, 15)[3], 0);
+            // Rimless white hair directly bordering checkerboard must stay 100% opaque
+            for gx in 6..10 {
+                assert_eq!(
+                    *native.get_pixel(gx, 3),
+                    Rgba([255, 255, 255, 255]),
+                    "Rimless white hair at ({}, 3) lost on style {:?}",
+                    gx,
+                    style
+                );
+            }
+            // Dark outline & interior white highlight must stay intact
+            assert_eq!(*native.get_pixel(5, 6), Rgba([25, 22, 30, 255]));
+            assert_eq!(*native.get_pixel(7, 7), Rgba([255, 255, 255, 255]));
+        }
+    }
+
+    #[test]
+    fn test_enclosed_chroma_pocket_cutout_and_palette_quantization() {
+        let (even_rgb, odd_rgb) = PixelGridStyle::Chroma.palette_pair();
+        let mut canvas = RgbaImage::new(256, 256); // 32x32 grid @ 8px/cell
+        let paint_cell = |img: &mut RgbaImage, gx: u32, gy: u32, rgb: [u8; 3]| {
+            for dy in 0..8 {
+                for dx in 0..8 {
+                    img.put_pixel(gx * 8 + dx, gy * 8 + dy, Rgba([rgb[0], rgb[1], rgb[2], 255]));
+                }
+            }
+        };
+
+        for gy in 0..32 {
+            for gx in 0..32 {
+                paint_cell(
+                    &mut canvas,
+                    gx,
+                    gy,
+                    if (gx + gy) % 2 == 0 { even_rgb } else { odd_rgb },
+                );
+            }
+        }
+
+        // 1. Paint building body with ~180 noisy continuous gradient shades (gx=4..22, gy=4..28)
+        for gy in 4..28u32 {
+            for gx in 4..22u32 {
+                let is_outline = gx == 4 || gx == 21 || gy == 4 || gy == 27;
+                if is_outline {
+                    paint_cell(&mut canvas, gx, gy, [24, 26, 34]);
+                } else {
+                    let r = (60 + ((gx * 3 + gy * 2) % 45)) as u8;
+                    let g = (75 + ((gx * 2 + gy * 3) % 45)) as u8;
+                    let b = (98 + ((gx + gy * 2) % 40)) as u8;
+                    paint_cell(&mut canvas, gx, gy, [r, g, b]);
+                }
+            }
+        }
+
+        // 2. Paint a dark-green tree foliage patch on the left (must NOT be removed as mint backdrop)
+        for gy in 18..24 {
+            for gx in 2..5 {
+                paint_cell(&mut canvas, gx, gy, [30, 77, 59]);
+            }
+        }
+
+        // 3. Paint a 1px closed utility pole frame on the right (gx=24..28, gy=6..14) trapping interior mint backdrop
+        for gy in 6..14 {
+            for gx in 24..28 {
+                if gx == 24 || gx == 27 || gy == 6 || gy == 13 {
+                    paint_cell(&mut canvas, gx, gy, [28, 30, 38]);
+                }
+                // Interior (gx=25..27, gy=7..13) stays untouched pastel-mint checkerboard!
+            }
+        }
+
+        // 4. Paint a single 1-cell warm yellow streetlamp accent at (23, 7)
+        paint_cell(&mut canvas, 23, 7, [255, 230, 58]);
+
+        let (_upscaled, native, cols, rows) = snap_guided_pixel_art(
+            &canvas,
+            32,
+            PixelGridStyle::Chroma,
+            true,
+            false,
+            Some(16),
+        );
+        assert_eq!((cols, rows), (32, 32));
+
+        // Enclosed pastel-mint hole inside utility pole (25, 9) MUST be transparent
+        assert_eq!(
+            native.get_pixel(25, 9)[3],
+            0,
+            "Enclosed pastel-mint pocket inside utility pole should be penetrated and removed"
+        );
+        // Utility pole frame itself stays opaque
+        assert_eq!(native.get_pixel(24, 9)[3], 255);
+        // Dark-green tree foliage MUST stay 100% opaque
+        assert_eq!(
+            native.get_pixel(3, 20)[3],
+            255,
+            "Dark-green foliage must never be mistaken for pastel-mint backdrop"
+        );
+        // Single 1-cell yellow streetlamp highlight MUST retain warm yellow chroma
+        let lamp = *native.get_pixel(23, 7);
+        assert_eq!(lamp[3], 255);
+        assert!(
+            lamp[0] > 210 && lamp[1] > 180 && lamp[2] < 100,
+            "1-cell streetlamp highlight was swallowed by background wall colors: {:?}",
+            lamp
+        );
+
+        // Total opaque palette must be strictly <= 16 colors
+        let unique_colors: std::collections::HashSet<[u8; 3]> = native
+            .pixels()
+            .filter(|p| p[3] > 0)
+            .map(|p| [p[0], p[1], p[2]])
+            .collect();
+        assert!(
+            unique_colors.len() <= 16,
+            "Expected <= 16 quantized colors, got {}",
+            unique_colors.len()
         );
     }
 }

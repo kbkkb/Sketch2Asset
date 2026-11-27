@@ -46,6 +46,8 @@
   import ProviderModelPicker from '$lib/components/ui/ProviderModelPicker.svelte';
   import {
     cleanPixelArtCanvas,
+    detectExactUniformGrid,
+    type PixelAlignMode,
     type PixelDetailMode,
     type PixelGridMode,
     type PixelPaletteMode
@@ -137,19 +139,22 @@
   let mattingEnhanced = $state(false);
   let mattingChoke = $state(0);
   let isMattingBusy = $state(false);
+  let isDualMattingBusy = $state(false);
   let lastMattingProvider = $state('DirectML (GPU) / CPU Ready');
 
   // Pixel Art Cleaner state
   let blockSizeMode = $state<'auto' | 'manual'>('auto');
   let manualBlockSize = $state(8);
+  let pixelAlignMode = $state<PixelAlignMode>('uniform');
   let pixelDetailMode = $state<PixelDetailMode>('standard');
   let pixelGrid = $state<PixelGridMode>('auto');
   let pixelPalette = $state<PixelPaletteMode>('auto');
-  let pixelCoalesce = $state(18);
+  let pixelAaStrip = $state(0);
   let pixelHardAlpha = $state(true);
   let showPixelGrid = $state(false);
   let lastPixelGridDims = $state<{ gw: number; gh: number } | null>(null);
   let lastPixelMeta = $state<string>('');
+  let lastPixelExactLocked = $state(false);
 
   // Custom Resolution Export state
   let exportW = $state(1024);
@@ -247,10 +252,11 @@
       mattingChoke: 0,
       blockSizeMode: 'auto' as 'auto' | 'manual',
       manualBlockSize: 8,
+      pixelAlignMode: 'uniform' as PixelAlignMode,
       pixelDetailMode: 'standard' as PixelDetailMode,
       pixelGrid: 'auto' as PixelGridMode,
       pixelPalette: 'auto' as PixelPaletteMode,
-      pixelCoalesce: 18,
+      pixelAaStrip: 0,
       pixelHardAlpha: true,
       regionEditMode: 'visual_guide' as 'visual_guide' | 'mask_edit',
       regionBlendMode: 'full' as 'full' | 'patch',
@@ -268,10 +274,11 @@
     mattingChoke = saved.mattingChoke ?? 0;
     blockSizeMode = saved.blockSizeMode || 'auto';
     manualBlockSize = saved.manualBlockSize ?? 8;
+    pixelAlignMode = saved.pixelAlignMode === 'adaptive' ? 'adaptive' : 'uniform';
     pixelDetailMode = saved.pixelDetailMode || 'standard';
     pixelGrid = saved.pixelGrid || 'auto';
     pixelPalette = saved.pixelPalette || 'auto';
-    pixelCoalesce = saved.pixelCoalesce ?? 18;
+    pixelAaStrip = saved.pixelAaStrip ?? 0;
     pixelHardAlpha = saved.pixelHardAlpha ?? true;
     regionEditMode = saved.regionEditMode || 'visual_guide';
     regionBlendMode = saved.regionBlendMode || 'full';
@@ -418,10 +425,11 @@
       mattingChoke,
       blockSizeMode,
       manualBlockSize,
+      pixelAlignMode,
       pixelDetailMode,
       pixelGrid,
       pixelPalette,
-      pixelCoalesce,
+      pixelAaStrip,
       pixelHardAlpha,
       regionEditMode,
       regionBlendMode,
@@ -493,6 +501,7 @@
     lastRegionEditPreCanvas = null;
     lastPixelGridDims = null;
     lastPixelMeta = '';
+    lastPixelExactLocked = false;
     undoStack.length = 0;
     redoStack.length = 0;
     undoCount = 0;
@@ -572,10 +581,19 @@
     lastRegionEditPreCanvas = null;
     lastPixelGridDims = null;
     lastPixelMeta = '';
+    lastPixelExactLocked = false;
     undoStack.length = 0;
     redoStack.length = 0;
     undoCount = 0;
     redoCount = 0;
+
+    const exactInit = origData ? detectExactUniformGrid(origData, w, h) : null;
+    if (exactInit) {
+      lastPixelGridDims = { gw: exactInit.gw, gh: exactInit.gh };
+      lastPixelMeta = `${exactInit.blockSize}px · ${exactInit.gw}×${exactInit.gh}`;
+      lastPixelExactLocked = true;
+      exportNearest = true;
+    }
 
     renderDisplayCanvas();
     requestAnimationFrame(() => fitViewport());
@@ -1353,6 +1371,57 @@
     }
   }
 
+  async function handleRunDualBgMatting() {
+    if (!origCanvas || !procCanvas || isMattingBusy || isDualMattingBusy) return;
+    const prof = appStore.activeProfile;
+    if (!prof || (prof.apiMode !== 'comfyui' && !prof.hasKey)) {
+      appStore.toast(
+        'err',
+        i18n.locale === 'en'
+          ? 'Please configure a valid API Key in API & Settings first'
+          : '请先在「API 与设置」中配置生图 API Key'
+      );
+      appStore.openSettings('providers');
+      return;
+    }
+    isDualMattingBusy = true;
+    pushUndo();
+    try {
+      const sourceUrl = origCanvas.toDataURL('image/png');
+      const res = await api.runDualBgMatting({
+        profileId: prof.id,
+        model: prof.apiModel,
+        imageDataUrl: sourceUrl,
+        choke: mattingChoke
+      });
+      const mattedImg = await loadHtmlImage(res.imageDataUrl);
+      procCanvas.width = mattedImg.naturalWidth;
+      procCanvas.height = mattedImg.naturalHeight;
+      const pctx = procCanvas.getContext('2d', { willReadFrequently: true })!;
+      pctx.clearRect(0, 0, procCanvas.width, procCanvas.height);
+      pctx.drawImage(mattedImg, 0, 0);
+      pixelBaseCanvas = null;
+      lastMattingProvider = `${res.providerInfo} · ${(res.elapsedMs / 1000).toFixed(1)}s`;
+      syncWorkingData();
+      appStore.toast(
+        'ok',
+        i18n.locale === 'en'
+          ? `Dual-plate true alpha solved (${(res.elapsedMs / 1000).toFixed(1)}s)`
+          : `双底差分真半透精抠完成 (${(res.elapsedMs / 1000).toFixed(1)}s)`
+      );
+    } catch (e: any) {
+      undoStack.pop();
+      undoCount = undoStack.length;
+      appStore.toast(
+        'err',
+        e?.message ??
+          (i18n.locale === 'en' ? 'Dual-plate matting failed' : '双底差分精抠失败')
+      );
+    } finally {
+      isDualMattingBusy = false;
+    }
+  }
+
   function handleSolidBgCutout() {
     if (!origCanvas || !procCanvas) return;
     pushUndo();
@@ -1389,17 +1458,32 @@
     return base;
   }
 
+  function parseAssetGridHint(asset: AssetItem | null): { gw: number; gh: number } | null {
+    const m = asset?.via?.match(/\[grid-(\d+)x(\d+)\]/i);
+    if (!m) return null;
+    const gw = parseInt(m[1] ?? '0', 10);
+    const gh = parseInt(m[2] ?? '0', 10);
+    return gw >= 8 && gh >= 8 ? { gw, gh } : null;
+  }
+
   function handleRunPixelClean() {
     if (!procCanvas || !origCanvas) return;
     const baseSource = ensurePixelBaseCanvas();
+    const hintGrid =
+      currentAsset &&
+      baseSource.width === currentAsset.width &&
+      baseSource.height === currentAsset.height
+        ? parseAssetGridHint(currentAsset)
+        : null;
     pushUndo();
     const res = cleanPixelArtCanvas(baseSource, {
       grid: pixelGrid,
       manualBlockSize: blockSizeMode === 'manual' ? manualBlockSize : undefined,
+      alignMode: pixelAlignMode,
+      hintGrid,
       palette: pixelPalette,
-      coalesceTolerance: pixelCoalesce,
+      aaStripStrength: pixelAaStrip,
       hardAlpha: pixelHardAlpha,
-      denoise: true,
       detailMode: pixelDetailMode
     });
     const pctx = procCanvas.getContext('2d', { willReadFrequently: true })!;
@@ -1407,6 +1491,7 @@
     pctx.drawImage(res.canvas, 0, 0);
 
     exportNearest = true;
+    lastPixelExactLocked = res.exactLocked;
     lastPixelGridDims = { gw: res.gw, gh: res.gh };
     const stepStr =
       Math.abs(res.stepX - res.stepY) < 0.3
@@ -1425,15 +1510,23 @@
   async function handleNativePixelExport() {
     if (!procCanvas) return;
     const baseSource = ensurePixelBaseCanvas();
+    const hintGrid =
+      currentAsset &&
+      baseSource.width === currentAsset.width &&
+      baseSource.height === currentAsset.height
+        ? parseAssetGridHint(currentAsset)
+        : null;
     const res = cleanPixelArtCanvas(baseSource, {
       grid: pixelGrid,
       manualBlockSize: blockSizeMode === 'manual' ? manualBlockSize : undefined,
+      alignMode: pixelAlignMode,
+      hintGrid,
       palette: pixelPalette,
-      coalesceTolerance: pixelCoalesce,
+      aaStripStrength: pixelAaStrip,
       hardAlpha: pixelHardAlpha,
-      denoise: true,
       detailMode: pixelDetailMode
     });
+    lastPixelExactLocked = res.exactLocked;
     lastPixelGridDims = { gw: res.gw, gh: res.gh };
     const stepStr =
       Math.abs(res.stepX - res.stepY) < 0.3
@@ -1481,8 +1574,7 @@
       const saved = await api.saveStudioAsset(dataUrl, targetProj, arch, label);
       currentAsset = saved;
       appStore.notifyAssetsChanged();
-      appStore.notifyAssetsChanged();
-    await Promise.all([refreshFilmstrip(), appStore.refreshProjects()]);
+      await Promise.all([refreshFilmstrip(), appStore.refreshProjects()]);
       appStore.toast(
         'ok',
         i18n.locale === 'en'
@@ -2641,7 +2733,7 @@
         <button
           type="button"
           onclick={handleRunAiMatting}
-          disabled={!imgWidth || isMattingBusy || installedMattingModels.length === 0}
+          disabled={!imgWidth || isMattingBusy || isDualMattingBusy || installedMattingModels.length === 0}
           class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-accent py-2 text-xs font-extrabold whitespace-nowrap text-accent-ink shadow-sm transition-transform active:scale-98 disabled:opacity-40"
         >
           {#if isMattingBusy}
@@ -2656,13 +2748,29 @@
         <button
           type="button"
           onclick={handleSolidBgCutout}
-          disabled={!imgWidth || isMattingBusy}
+          disabled={!imgWidth || isMattingBusy || isDualMattingBusy}
           title={i18n.t('studio_solid_cutout_tip')}
           class="shrink-0 rounded-lg border border-line bg-ink-2 px-2.5 py-2 text-xs font-semibold whitespace-nowrap text-fg transition-colors hover:border-accent/50 disabled:opacity-40"
         >
           {i18n.t('studio_matting_solid_btn')}
         </button>
       </div>
+
+      <button
+        type="button"
+        onclick={handleRunDualBgMatting}
+        disabled={!imgWidth || isMattingBusy || isDualMattingBusy}
+        title={i18n.t('studio_matting_dual_tip')}
+        class="flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent/40 bg-accent/12 py-1.5 text-xs font-bold whitespace-nowrap text-accent transition-colors hover:bg-accent hover:text-accent-ink disabled:opacity-40"
+      >
+        {#if isDualMattingBusy}
+          <Loader2 size={13} class="animate-spin" />
+          <span>{i18n.t('studio_matting_dual_running')}</span>
+        {:else}
+          <WandSparkles size={13} strokeWidth={2} />
+          <span>{i18n.t('studio_matting_dual_btn')}</span>
+        {/if}
+      </button>
     </section>
 
     <!-- CARD 2: AI Pixel Art Cleaner (Upgraded with Periodicity Detection & Block Slider) -->
@@ -2733,6 +2841,43 @@
         </div>
       {/if}
 
+      {#if lastPixelExactLocked && blockSizeMode === 'auto'}
+        <div
+          class="rounded-lg border border-ok/30 bg-ok/10 px-2.5 py-1 text-[10px] font-medium text-ok"
+        >
+          {i18n.t('studio_pixel_exact_badge')}
+        </div>
+      {/if}
+
+      <!-- Grid Alignment Mode: Uniform (SpriteFusion/pixel-perfect) vs Adaptive -->
+      <div class="flex flex-col gap-1">
+        <span class="text-[11px] font-medium text-fg-muted">
+          {i18n.t('studio_pixel_align_label')}
+        </span>
+        <div class="flex rounded-lg border border-line bg-ink-1 p-0.5 text-xs">
+          <button
+            type="button"
+            onclick={() => (pixelAlignMode = 'uniform')}
+            class="flex-1 rounded-md py-1 text-center font-semibold whitespace-nowrap transition-colors {pixelAlignMode ===
+            'uniform'
+              ? 'bg-ink-2 text-accent shadow-sm'
+              : 'text-fg-muted hover:text-fg'}"
+          >
+            {i18n.t('studio_pixel_align_uniform')}
+          </button>
+          <button
+            type="button"
+            onclick={() => (pixelAlignMode = 'adaptive')}
+            class="flex-1 rounded-md py-1 text-center font-semibold whitespace-nowrap transition-colors {pixelAlignMode ===
+            'adaptive'
+              ? 'bg-ink-2 text-accent shadow-sm'
+              : 'text-fg-muted hover:text-fg'}"
+          >
+            {i18n.t('studio_pixel_align_adaptive')}
+          </button>
+        </div>
+      </div>
+
       <div class="grid grid-cols-2 gap-2">
         <div class="flex flex-col gap-1">
           <label for="pixel-grid-sel" class="text-[11px] font-medium text-fg-muted">
@@ -2744,6 +2889,7 @@
             class="rounded-lg border border-line bg-ink-1 px-2 py-1.5 text-xs font-medium text-fg focus:border-accent focus:outline-none"
           >
             <option value="auto">{i18n.t('studio_pixel_follow_auto')}</option>
+            <option value="16">16 × 16</option>
             <option value="32">32 × 32</option>
             <option value="48">48 × 48</option>
             <option value="64">64 × 64</option>
@@ -2764,8 +2910,11 @@
             class="rounded-lg border border-line bg-ink-1 px-2 py-1.5 text-xs font-medium text-fg focus:border-accent focus:outline-none"
           >
             <option value="auto">{i18n.t('studio_pal_auto')}</option>
+            <option value="auto_cel">{i18n.t('studio_pal_auto_cel')}</option>
             <option value="16">{i18n.t('studio_pal_16')}</option>
+            <option value="24">{i18n.t('studio_pal_24')}</option>
             <option value="32">{i18n.t('studio_pal_32')}</option>
+            <option value="48">{i18n.t('studio_pal_48')}</option>
             <option value="64">{i18n.t('studio_pal_64')}</option>
             <option value="pico8">{i18n.t('studio_pal_pico8')}</option>
             <option value="gameboy">{i18n.t('studio_pal_gameboy')}</option>
@@ -2802,25 +2951,25 @@
         </div>
       </div>
 
-      <!-- Perceptual Color Coalescing Slider (Removes AI intra-color noise) -->
+      <!-- Optional OKLAB Collinear Sandwich De-AA Slider (0 = Pure Intra-Cell Unification) -->
       <div class="flex flex-col gap-1">
         <div class="flex items-center justify-between text-xs">
           <span class="text-fg-muted">
-            {i18n.t('studio_pixel_coalesce')}
+            {i18n.t('studio_pixel_aa_strip')}
           </span>
-          <span class="font-mono font-bold text-accent">{pixelCoalesce}</span>
+          <span class="font-mono font-bold text-accent">{pixelAaStrip}%</span>
         </div>
         <input
           type="range"
           min="0"
-          max="45"
-          step="1"
-          bind:value={pixelCoalesce}
+          max="100"
+          step="5"
+          bind:value={pixelAaStrip}
           class="w-full accent-accent"
         />
       </div>
 
-      <div class="flex items-center justify-between gap-2">
+      <div class="flex flex-wrap items-center justify-between gap-2">
         <label class="flex cursor-pointer items-center gap-1.5 text-xs text-fg">
           <input
             type="checkbox"

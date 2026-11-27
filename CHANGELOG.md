@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [0.3.1] - 2026-11-27
+
+### ✨ 新增功能 (Added)
+
+- **棋盘落差画布引导生图 (Micro-Contrast Checkerboard Pixel Guidance)**
+  - 在「生图工坊」选择像素品类或像素画风时，自动向生图模型注入确定性微对比度交替方格引导底图：支持 **青绿微差（`#D6F8DC / #BAEAC3`，免抠泛洪直出）** 与 **浅灰微差（`#F0F2F6 / #DADEE4`，零色偏）** 双模式，从源头锁定逻辑像素尺度、防止 Mixels 大小混用，并引导主体填充 `85%–92%` 画幅。
+  - **高密网格与精准轴向锁定**：提供 `16×16` / `32×32` / `48×48` / `64×64` / `96×96` / `128×128` 档位（同步修复非 2 次幂档位轴向取整漂移），并支持 `Chroma` 模式下**穿透 `1px` 闭合轮廓清除内部薄荷绿镂空孔洞**（严格保护深绿树冠/草丛主体）。
+  - **显著性保护感知色板收敛**：在 `redmean` 色彩空间锚定主色、最暗 `1px` 轮廓色与最亮高光点缀色，将 AI 连续渐变收敛为干净的赛璐璐平涂色板（UI 支持 **自动精炼 / 16 / 24 / 32 / 48 / 64 / 原色不限**）。
+  - **MCP 协议全打通**：`s2a_generate_asset` 与内置 `SKILL.md` 同步支持 `pixel_grid_guide`、`pixel_grid_style`、`pixel_palette_colors`。
+- **双底差分真半透精抠 (Smith-Blinn Dual-Plate Triangulation Matting)**
+  - 「精修工坊」抠图卡片新增 **「双底差分真半透精抠 (玻璃/火焰/白发)」**：自动识别原图底色并调用当前生图模型生成互补纯黑/纯白对照底板，经 `±6px` 梯度互相关自动配准后，通过 Smith-Blinn 闭式三角测量物理求解真实半透明 Alpha 与零白边前景色。
+
+### 🎨 算法重构与画质升级 (Changed & Improved)
+
+- **工作台像素纯化引擎彻底重构（残差相位定格 + `k-Centroid`）**
+  - **重构残差定格 (`ventz/pixel-perfect`)**：自动搜索令格心残差最小的 `(step, phaseX, phaseY)`，即使被裁剪过边缘的非整除像素图也能零误差锁死网格；提供 **等宽相位锁格 (`Uniform · 零形变`)** 与 **弹性游走纠偏 (`Adaptive`)** 双模式。
+  - **单格独立 `k-Centroid (k=2)` 真色提取**：废除跨格强行吞色与算术平均模糊逻辑，对每个网格单元独立剥离边缝杂色并取最高权重真实像素色（Medoid）——规整像素图 100% 幂等零失真；序列帧动画纯化同步升级。
+  - **OKLAB 共线夹心去灰边 (`lovelaced/pixfix`，默认 `0%`)**：基于三角不等式仅清理夹在两侧异色连线正中的孤立半格过渡边，从数学上杜绝五官被吞或暗影乱变黑块。
+- **本地离线 GPU 抠图管线升级**
+  - 采用无振铃 `f32` 双线性掩码上采样，在过渡带执行 **3 通道 RGB 引导滤波（Fast Guided Image Filter）** 自动收敛虚胖模糊边缘；
+  - 引入 **共线边缘去白贴纸反解** 与 **PyMatting 多尺度金字塔前背景分离 (`estimate_foreground_ml`)**，并升级 `Choke` 为 **各向同性 8 邻域亚像素微缩**，消除发丝白晕与斜线阶梯锯齿。
+
+### 🛠️ 兼容性与诊断修复 (Fixed)
+
+- **Google Gemini 原生生图兼容修复**：针对使用 `https://generativelanguage.googleapis.com/v1beta/openai/` 调用 Gemini / Nano-Banana 图像模型时官方转换层返回 `HTTP 400 Unhandled generated data mime type` 假失败（后台实际已出图）的问题，自动识别并路由直连 Google 原生 `/v1beta/models/{model}:generateContent` 接口解包 `inlineData` 图片；同时增强第三方代理的跨行 Base64 解析与批量连抽部分成功资产保留。
+- **完整生图错误详情与日志弹窗**：支持解析 JSON 数组报错结构；生图失败卡片支持内部滚动，卡片与顶部错误 Toast 均新增 **「详情」** 弹窗查看格式化原始响应报文并支持一键复制。
+
+### English Summary (`v0.3.1`)
+
+- **Added**:
+  - **Micro-Contrast Checkerboard Pixel Canvas Guidance** in Asset Forge & MCP (`s2a_generate_asset`): deterministic `Chroma` (`#D6F8DC/#BAEAC3`) & `Neutral` (`#F0F2F6/#DADEE4`) grid guides (`16`–`128`), `85%–92%` subject fill rules, exact axis locking, enclosed chroma pocket penetration cutout, and salience-boosted `redmean` palette quantization (`Auto` / `16`–`64` / `Unlimited`).
+  - **Dual-Plate True Alpha Matting** in Canvas Studio: generates a complementary black/white reference plate, auto-registers shifts (`±6px`), and solves Smith-Blinn closed-form triangulation for translucent glass, fire, smoke, and white hair.
+- **Changed & Improved**:
+  - **Pro Studio Pixel Snapper Overhaul**: Replaced cross-cell heuristic coalescing with Reconstruction-Residual `(step, phase)` grid locking (`Uniform` / `Adaptive`), per-cell OKLAB `k-Centroid (k=2)` true-medoid voting, and optional collinear sandwich AA stripping (`0%` default).
+  - **Upgraded Local GPU Matting Post-Process**: `f32` bilinear mask upscaling, 3-channel RGB Fast Guided Filter on boundary bands, collinear sticker-rim decontamination, Multi-Level Foreground/Background Estimation (`estimate_foreground_ml`), and isotropic 8-neighbor sub-pixel edge choke.
+- **Fixed**:
+  - **Native Google Gemini `:generateContent` Auto-Routing**: Automatically bypasses Google's `/v1beta/openai/chat/completions` translation bug (`HTTP 400 Unhandled generated data mime type`) for `generativelanguage.googleapis.com` image models while preserving partial successes in batch runs.
+  - **Full Error Details Modal & Copy**: Added JSON-array error extraction, scrollable failed job cards, and expandable formatted raw-response error dialogs on both Generate cards and global error toasts.
+
+---
+
 ## [0.3.0] - 2026-11-25
 
 ### ✨ 新增功能 (Added)

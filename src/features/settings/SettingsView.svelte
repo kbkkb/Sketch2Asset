@@ -1665,7 +1665,7 @@
                     <Info size={14} class="text-accent" />
                     <span>{i18n.t('about_app_title')}</span>
                     <span class="rounded-md bg-ink-2 px-2 py-0.5 font-mono text-[11px] font-bold text-accent">
-                      v{appStore.appVersion || '0.3.0'}
+                      v{appStore.appVersion || '0.3.1'}
                     </span>
                     {#if appStore.updateInfo}
                       {#if appStore.updateInfo.hasUpdate}

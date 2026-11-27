@@ -22,6 +22,7 @@ import type {
   DecomposeJobResult,
   DecomposeHistoryItem,
   DecomposeLayerInfo,
+  DualBgMattingPayload,
   RunDecomposeOptions
 } from './types';
 
@@ -103,6 +104,8 @@ export const api = {
   openModelsFolder: () => call<void>('open_models_folder'),
   runAiMatting: (payload: MattingRequestPayload) =>
     call<MattingResponsePayload>('run_ai_matting', { payload }),
+  runDualBgMatting: (payload: DualBgMattingPayload) =>
+    call<MattingResponsePayload>('run_dual_bg_matting', { payload }),
   readImageDataUrl: (filePath: string) =>
     call<string>('read_image_data_url', { filePath }),
   saveStudioAsset: (

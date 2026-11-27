@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Release-v0.3.0-84cc16.svg" alt="Version v0.3.0">
+  <img src="https://img.shields.io/badge/Release-v0.3.1-84cc16.svg" alt="Version v0.3.1">
   <img src="https://img.shields.io/badge/Architecture-Tauri_2_%2B_Rust-orange.svg" alt="Tauri 2 + Rust">
   <img src="https://img.shields.io/badge/Frontend-Svelte_5_%2B_Three.js-ff3e00.svg" alt="Svelte 5 + Three.js">
   <img src="https://img.shields.io/badge/Matting-ONNX_DirectML_GPU-10b981.svg" alt="ONNX Runtime DirectML">
@@ -22,7 +22,7 @@
 
 ---
 
-## Why Sketch2Asset v0.3.0?
+## Why Sketch2Asset v0.3.1?
 
 General-purpose AI image generators routinely fail at the **"last mile" of game production**:
 - Sweeping sword slashes in sprite sheets breach uniform grid lines and get severed, or airborne jump frames float inside the texture and misalign Unity / Godot colliders;
@@ -86,7 +86,9 @@ General-purpose AI image generators routinely fail at the **"last mile" of game 
   <img src="docs/media/forge-overview.png" alt="Asset Forge Workspace" width="88%">
 </p>
 
-- **7 Game Asset Archetypes**: Includes the new **`Sprite Sheet (sprite_sheet)`** archetype alongside **Item Icon, Pixel Sprite, Character Card, Tile Texture, UI Element, and Free Mode**, automatically injecting production composition rules and modifier tags.
+- **7 Game Asset Archetypes**: Includes **`Sprite Sheet (sprite_sheet)`** alongside **Item Icon, Pixel Sprite, Character Card, Tile Texture, UI Element, and Free Mode**, automatically injecting production composition rules and modifier tags.
+- **Checkerboard Pixel Canvas Guidance & Palette Lock *(v0.3.1 New)***: Automatically injects a micro-contrast `16`–`128` grid canvas (`Chroma` `#D6F8DC/#BAEAC3` for matting-free cutout + enclosed pocket cleanup, or `Neutral` `#F0F2F6/#DADEE4` for zero color cast), snaps every cell back to exact integer grids, and converges noisy AI gradients cleanly via salience-boosted `redmean` palette quantization (`Auto` / `16`–`64` / `Unlimited`).
+- **Native Google Gemini & Rich Diagnostics *(v0.3.1 Fixed)***: Auto-routes `generativelanguage.googleapis.com` image models to native `:generateContent` (fixing Google's `/openai` mime-type 400 drops) and adds expandable full-JSON error inspection & copy modals.
 - **Prompt Matrix & Negative Guardrails**: Expand `[fire|ice|lightning]` × `[greatsword|staff]` into up to 16 parallel variants; toggle 5 game-ready negative guardrails with one click.
 - **Project Style Anchors & Region Annotations**: Lock a project-wide Style Prompt and up to 4 reference anchors, or draw numbered bounding boxes (`#1`, `#2`...) directly on reference images for targeted edits.
 
@@ -117,6 +119,8 @@ General-purpose AI image generators routinely fail at the **"last mile" of game 
   <img src="docs/media/demo-pixel-cleaner.png" alt="AI Pixel Art Cleaner Comparison" width="88%">
 </p>
 
+- **Upgraded Halo-Free Matting & Dual-Plate Triangulation *(v0.3.1 Upgraded)***: Combines `f32` bilinear mask upscaling, 3-channel RGB **Fast Guided Image Filtering**, **Multi-Level Foreground/Background Estimation** (`estimate_foreground_ml`), and isotropic sub-pixel edge choke; plus one-click **Dual-Plate True Alpha** (Smith-Blinn white/black triangulation) for translucent glass, fire, smoke, and fine white hair.
+- **Residual Grid + `k-Centroid` Pixel Snapper *(v0.3.1 Overhauled)***: Uses Reconstruction-Residual `(step, phase)` grid locking (`Uniform` zero-warp & `Adaptive` modes), per-cell OKLAB `k-Centroid (k=2)` medoid voting (100% lossless on already crisp pixel art), and optional OKLAB collinear sandwich AA stripping.
 - **DirectML GPU AI Matting**: Powered by Rust `ort` + ONNX Runtime DirectML (NVIDIA / AMD / Intel out of the box, zero Python/CUDA) with 6 downloadable models:
 
 <details>

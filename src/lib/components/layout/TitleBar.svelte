@@ -82,7 +82,7 @@
             data-tauri-drag-region
             class="rounded border border-line bg-ink-2/90 px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-normal text-fg-muted"
           >
-            v{appStore.appVersion || '0.3.0'}
+            v{appStore.appVersion || '0.3.1'}
           </span>
         </div>
         <div

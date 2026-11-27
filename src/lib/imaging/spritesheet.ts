@@ -742,10 +742,10 @@ export function sliceAndAlignSpriteSheet(
   if (opts.pixelClean) {
     const cleaned = cleanPixelArtCanvas(workingSheet, {
       grid: 'auto',
+      alignMode: 'uniform',
       palette: 'auto',
-      coalesceTolerance: 18,
+      aaStripStrength: 0,
       hardAlpha: true,
-      denoise: true,
       detailMode: 'standard'
     });
     workingSheet = cleaned.canvas;

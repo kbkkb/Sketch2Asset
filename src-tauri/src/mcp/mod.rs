@@ -401,6 +401,11 @@ async fn exec_generate_asset(state: &AppState, args: &Value) -> AppResult<Value>
         count: 1,
         sketch_data_url: None,
         sketch_path,
+        pixel_grid_size: None,
+        pixel_grid_style: None,
+        pixel_auto_snap: None,
+        pixel_auto_cutout: None,
+        pixel_palette_colors: None,
     };
 
     let sketch_bytes = resolve_sketch_input(&payload)?;
@@ -423,10 +428,66 @@ async fn exec_generate_asset(state: &AppState, args: &Value) -> AppResult<Value>
         None
     };
 
+    let requested_grid_guide = args
+        .get("pixel_grid_guide")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32);
+    let active_grid_guide = if align_spritesheet || secondary_ref_bytes.is_some() {
+        None
+    } else {
+        match requested_grid_guide {
+            Some(0) => None,
+            Some(n) => Some(n.clamp(8, 256)),
+            None if archetype == "pixel_sprite" => Some(64),
+            None => None,
+        }
+    };
+    let grid_guide_style = if args.get("pixel_grid_style").and_then(|v| v.as_str()).is_some() {
+        postprocess::PixelGridStyle::from_str_opt(
+            args.get("pixel_grid_style").and_then(|v| v.as_str()),
+        )
+    } else if auto_remove_bg {
+        postprocess::PixelGridStyle::Chroma
+    } else {
+        postprocess::PixelGridStyle::Neutral
+    };
+
     let has_any_ref = sketch_bytes.is_some() || secondary_ref_bytes.is_some();
     let final_prompt = assemble_game_asset_prompt(&payload, has_any_ref);
 
-    let (mut img_bytes, via) = if prof.api_mode == "comfyui" {
+    let mut used_grid_canvas: Option<(u32, postprocess::PixelGridStyle)> = None;
+    let (mut img_bytes, via) = if let Some(grid_cells) = active_grid_guide {
+        let (tw, th) = providers::parse_size_dims(&size).unwrap_or((1024, 1024));
+        let (guide_png, cols, rows) =
+            postprocess::render_checkerboard_guide_png(tw, th, grid_cells, grid_guide_style)
+                .map_err(|e| AppError::new(AppErrorCode::Internal, e))?;
+        let guided_prompt = crate::commands::assemble_guided_pixel_prompt(
+            &payload,
+            sketch_bytes.is_some(),
+            cols,
+            rows,
+            grid_guide_style,
+        );
+        let (b, ep) = providers::generate_with_grid_guide(
+            &state.http,
+            &prof.api_mode,
+            &prof.api_base,
+            &api_key,
+            &model,
+            &guided_prompt,
+            &final_prompt,
+            &payload.negative_prompt,
+            &size,
+            sketch_bytes.clone(),
+            guide_png,
+            prof.comfy_config.as_ref(),
+        )
+        .await?;
+        if !ep.contains("grid-fallback") {
+            used_grid_canvas = Some((grid_cells, grid_guide_style));
+        }
+        (b, ep)
+    } else if prof.api_mode == "comfyui" {
         providers::comfyui::generate_via_comfyui(
             &state.http,
             &prof.api_base,
@@ -503,106 +564,136 @@ async fn exec_generate_asset(state: &AppState, args: &Value) -> AppResult<Value>
             }
         }
 
-        let sprite_grid = if align_spritesheet {
-            Some(postprocess::infer_sprite_grid(
-                &prompt,
-                sprite_rows,
-                sprite_cols,
-            ))
-        } else {
-            None
-        };
-
-        let mut rgba_img = if auto_remove_bg {
-            let matting_res = match sprite_grid {
-                Some((rows, cols)) if rows.saturating_mul(cols) > 1 => {
-                    state.matting.run_matting_spritesheet_grid(
-                        &dyn_img, rows, cols, "birefnet", "auto", true, 1,
-                    )
-                }
-                _ => state
-                    .matting
-                    .run_matting(&dyn_img, "birefnet", "auto", true, 1),
-            };
-            match matting_res {
-                Ok((rgba, prov)) => {
-                    matting_provider = Some(prov);
-                    rgba
-                }
-                Err(err) => {
-                    eprintln!("[mcp] matting skipped due to error: {}", err);
-                    dyn_img.to_rgba8()
-                }
+        if let Some((grid_cells, g_style)) = used_grid_canvas {
+            let is_tile = archetype == "tile_texture";
+            let requested_palette_colors = args
+                .get("pixel_palette_colors")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as u32);
+            let (q_img, n_img, scols, _srows) = postprocess::snap_guided_pixel_art(
+                &dyn_img.to_rgba8(),
+                grid_cells,
+                g_style,
+                auto_remove_bg,
+                is_tile,
+                requested_palette_colors,
+            );
+            let up_w = q_img.width();
+            let mut cursor = io::Cursor::new(Vec::new());
+            if image::DynamicImage::ImageRgba8(q_img)
+                .write_to(&mut cursor, image::ImageFormat::Png)
+                .is_ok()
+            {
+                img_bytes = cursor.into_inner();
             }
-        } else {
-            dyn_img.to_rgba8()
-        };
-
-        if let Some((rows, cols)) = sprite_grid {
-            let preserve_vertical_arc = args
-                .get("preserve_vertical_arc")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let (aligned_sheet, aligned_frames) =
-                postprocess::align_spritesheet_uniform_grid_with_options(
-                    &rgba_img,
-                    rows,
-                    cols,
-                    0.86,
-                    preserve_vertical_arc,
-                );
-
-            if is_pixel_art {
-                let (q_sheet, n_sheet, q_frames, blk) = postprocess::quantize_spritesheet_frames(
-                    &aligned_sheet,
-                    &aligned_frames,
-                    rows,
-                    cols,
-                    pixel_block_size,
-                );
-                rgba_img = q_sheet;
-                aligned_frames_out = q_frames;
-                native_1x_out = Some(n_sheet);
-                detected_block_size = Some(blk);
-            } else {
-                rgba_img = aligned_sheet;
-                aligned_frames_out = aligned_frames;
+            if auto_remove_bg {
+                matting_provider = Some("checkerboard_grid_cutout".to_string());
             }
-
-            let fw = aligned_frames_out
-                .first()
-                .map(|f| f.width())
-                .unwrap_or(rgba_img.width() / cols.max(1));
-            let fh = aligned_frames_out
-                .first()
-                .map(|f| f.height())
-                .unwrap_or(rgba_img.height() / rows.max(1));
-
-            sprite_grid_meta = Some(json!({
-                "rows": rows,
-                "cols": cols,
-                "frameCount": rows * cols,
-                "frameWidth": fw,
-                "frameHeight": fh,
-                "baselineRatio": 0.86,
-                "preserveVerticalArc": preserve_vertical_arc
-            }));
-            skip_resize_on_save = true;
-        } else if is_pixel_art {
-            let (q_img, n_img, blk) =
-                postprocess::quantize_pixel_art_grid(&rgba_img, pixel_block_size, true);
-            rgba_img = q_img;
+            detected_block_size = Some((up_w / scols.max(1)).max(1));
             native_1x_out = Some(n_img);
-            detected_block_size = Some(blk);
             skip_resize_on_save = true;
-        }
+        } else {
+            let sprite_grid = if align_spritesheet {
+                Some(postprocess::infer_sprite_grid(
+                    &prompt,
+                    sprite_rows,
+                    sprite_cols,
+                ))
+            } else {
+                None
+            };
 
-        let mut cursor = io::Cursor::new(Vec::new());
-        if image::DynamicImage::ImageRgba8(rgba_img)
-            .write_to(&mut cursor, image::ImageFormat::Png)
-            .is_ok()
-        {
-            img_bytes = cursor.into_inner();
+            let mut rgba_img = if auto_remove_bg {
+                let matting_res = match sprite_grid {
+                    Some((rows, cols)) if rows.saturating_mul(cols) > 1 => {
+                        state.matting.run_matting_spritesheet_grid(
+                            &dyn_img, rows, cols, "birefnet", "auto", true, 1,
+                        )
+                    }
+                    _ => state
+                        .matting
+                        .run_matting(&dyn_img, "birefnet", "auto", true, 1),
+                };
+                match matting_res {
+                    Ok((rgba, prov)) => {
+                        matting_provider = Some(prov);
+                        rgba
+                    }
+                    Err(err) => {
+                        eprintln!("[mcp] matting skipped due to error: {}", err);
+                        dyn_img.to_rgba8()
+                    }
+                }
+            } else {
+                dyn_img.to_rgba8()
+            };
+
+            if let Some((rows, cols)) = sprite_grid {
+                let preserve_vertical_arc = args
+                    .get("preserve_vertical_arc")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let (aligned_sheet, aligned_frames) =
+                    postprocess::align_spritesheet_uniform_grid_with_options(
+                        &rgba_img,
+                        rows,
+                        cols,
+                        0.86,
+                        preserve_vertical_arc,
+                    );
+
+                if is_pixel_art {
+                    let (q_sheet, n_sheet, q_frames, blk) = postprocess::quantize_spritesheet_frames(
+                        &aligned_sheet,
+                        &aligned_frames,
+                        rows,
+                        cols,
+                        pixel_block_size,
+                    );
+                    rgba_img = q_sheet;
+                    aligned_frames_out = q_frames;
+                    native_1x_out = Some(n_sheet);
+                    detected_block_size = Some(blk);
+                } else {
+                    rgba_img = aligned_sheet;
+                    aligned_frames_out = aligned_frames;
+                }
+
+                let fw = aligned_frames_out
+                    .first()
+                    .map(|f| f.width())
+                    .unwrap_or(rgba_img.width() / cols.max(1));
+                let fh = aligned_frames_out
+                    .first()
+                    .map(|f| f.height())
+                    .unwrap_or(rgba_img.height() / rows.max(1));
+
+                sprite_grid_meta = Some(json!({
+                    "rows": rows,
+                    "cols": cols,
+                    "frameCount": rows * cols,
+                    "frameWidth": fw,
+                    "frameHeight": fh,
+                    "baselineRatio": 0.86,
+                    "preserveVerticalArc": preserve_vertical_arc
+                }));
+                skip_resize_on_save = true;
+            } else if is_pixel_art {
+                let (q_img, n_img, blk) =
+                    postprocess::quantize_pixel_art_grid(&rgba_img, pixel_block_size, true);
+                rgba_img = q_img;
+                native_1x_out = Some(n_img);
+                detected_block_size = Some(blk);
+                skip_resize_on_save = true;
+            }
+
+            let mut cursor = io::Cursor::new(Vec::new());
+            if image::DynamicImage::ImageRgba8(rgba_img)
+                .write_to(&mut cursor, image::ImageFormat::Png)
+                .is_ok()
+            {
+                img_bytes = cursor.into_inner();
+            }
         }
     }
 
@@ -1465,6 +1556,9 @@ fn mcp_tools_schema() -> Value {
                         "auto_remove_bg": { "type": "boolean", "description": "Automatically run local DirectML GPU matting + 3-stage anti-halo after generation (defaults to true for pixel_sprite)" },
                         "pixel_perfect": { "type": "boolean", "description": "Snap pixel art to a strict integer pixel grid with crisp alpha & zero mixels, plus export a 1x native pixel PNG (auto-enabled for pixel_sprite or pixel prompts)" },
                         "pixel_block_size": { "type": "integer", "description": "Optional explicit pixel block size (e.g. 4, 6, 8); auto-detected via edge-span histogram if omitted" },
+                        "pixel_grid_guide": { "type": "integer", "description": "Micro-contrast checkerboard canvas cell count along short side (e.g. 16, 32, 48, 64, 96, 128; 0 disables). Auto-defaults to 64 for pixel_sprite to lock cell uniformity and crisp grid-parity cutout." },
+                        "pixel_grid_style": { "type": "string", "enum": ["chroma", "neutral"], "description": "Checkerboard canvas style: 'chroma' (soft pastel mint for Matting-free cutout + enclosed hole penetration) or 'neutral' (soft light gray, zero color cast)." },
+                        "pixel_palette_colors": { "type": "integer", "description": "Optional perceptual palette color limit (e.g. 16, 24, 32, 48, 64; omit for resolution-aware auto cel-shading, 0 for unlimited raw colors)." },
                         "preserve_vertical_arc": { "type": "boolean", "description": "Default false (Engine In-Place mode: keeps every frame anchored to the character collider/ground origin for Unity/Godot Rigidbody2D). Set true only if you want a static showcase parabolic jump height offset baked inside the sprite canvas." },
                         "output_path": { "type": "string", "description": "Optional destination PNG file path inside the user's game repository" }
                     },

@@ -81,9 +81,9 @@ class AppStore {
     try {
       const [s, ver] = await Promise.all([
         api.getSettings(),
-        getVersion().catch(() => '0.3.0')
+        getVersion().catch(() => '0.3.1')
       ]);
-      this.appVersion = ver || '0.3.0';
+      this.appVersion = ver || '0.3.1';
       this.applySettings(s);
       this.projects = await api.listProjects();
       void this.refreshUpdateCheck(true);
